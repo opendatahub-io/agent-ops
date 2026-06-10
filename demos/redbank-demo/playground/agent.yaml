@@ -1,0 +1,9 @@
+name: redbank-playground
+displayName: "RedBank Playground UI"
+description: "Standalone chat playground UI for the RedBank Orchestrator agent."
+env:
+  required:
+    - ORCHESTRATOR_URL
+  optional:
+    - PORT
+    - CONTAINER_IMAGE

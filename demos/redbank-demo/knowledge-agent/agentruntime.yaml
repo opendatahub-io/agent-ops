@@ -1,0 +1,12 @@
+apiVersion: agent.kagenti.dev/v1alpha1
+kind: AgentRuntime
+metadata:
+  name: redbank-knowledge-agent-runtime
+  labels:
+    app.kubernetes.io/name: redbank-knowledge-agent
+spec:
+  type: agent
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: redbank-knowledge-agent

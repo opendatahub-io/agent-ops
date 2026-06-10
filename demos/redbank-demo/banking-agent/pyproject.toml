@@ -1,0 +1,21 @@
+[project]
+name = "redbank-banking-agent"
+version = "1.0.0"
+description = "Admin-only banking operations agent (A2A) for the RedBank demo — write access via MCP."
+requires-python = ">=3.12"
+dependencies = [
+    "a2a-sdk[http-server]==0.3.26",
+    "langchain>=1.2.15",
+    "langchain-mcp-adapters>=0.2.2",
+    "langchain-openai>=1.1.13",
+    "langgraph>=1.1.6",
+    "mlflow[kubernetes]>=3.11.1",
+    "uvicorn>=0.38.0",
+]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

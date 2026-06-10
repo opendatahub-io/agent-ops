@@ -1,0 +1,11 @@
+.venv
+__pycache__
+*.pyc
+.env
+.git
+*.md
+template.env
+Makefile
+agentruntime.yaml
+banking-agent.yaml
+deploy.sh

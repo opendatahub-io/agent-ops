@@ -1,0 +1,14 @@
+{{- if .Values.agentRuntime.enabled }}
+apiVersion: agent.kagenti.dev/v1alpha1
+kind: AgentRuntime
+metadata:
+  name: {{ include "agent.fullname" . }}-runtime
+  labels:
+    {{- include "agent.labels" . | nindent 4 }}
+spec:
+  type: agent
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "agent.fullname" . }}
+{{- end }}

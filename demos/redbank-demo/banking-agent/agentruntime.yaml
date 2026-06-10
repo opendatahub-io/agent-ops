@@ -1,0 +1,12 @@
+apiVersion: agent.kagenti.dev/v1alpha1
+kind: AgentRuntime
+metadata:
+  name: redbank-banking-agent-runtime
+  labels:
+    app.kubernetes.io/name: redbank-banking-agent
+spec:
+  type: agent
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: redbank-banking-agent

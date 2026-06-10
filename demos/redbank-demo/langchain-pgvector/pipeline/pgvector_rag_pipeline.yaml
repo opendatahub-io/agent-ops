@@ -1,0 +1,303 @@
+# PIPELINE DEFINITION
+# Name: pgvector-rag-pipeline
+# Description: Ingest RedBank PDFs into PGVector with admin/user collections
+# Inputs:
+#    admin_filenames: str [Default: 'admin/redbank_compliance_procedures.pdf,admin/redbank_transaction_operations.pdf,admin/redbank_user_management.pdf']
+#    base_url: str [Default: 'https://raw.githubusercontent.com/opendatahub-io/agent-ops/main/demos/redbank-demo/langchain-pgvector/docs']
+#    chunk_overlap: int [Default: 200.0]
+#    chunk_size: int [Default: 1000.0]
+#    pg_database: str [Default: 'db']
+#    pg_host: str [Default: 'postgresql.redbank-demo.svc.cluster.local']
+#    pg_password: str [Default: 'app']
+#    pg_port: str [Default: '5432']
+#    pg_user: str [Default: 'app']
+#    user_filenames: str [Default: 'user/redbank_account_selfservice.pdf,user/redbank_password_and_security.pdf,user/redbank_payments_and_transfers.pdf']
+components:
+  comp-ingest-documents:
+    executorLabel: exec-ingest-documents
+    inputDefinitions:
+      parameters:
+        base_url:
+          parameterType: STRING
+        chunk_overlap:
+          parameterType: NUMBER_INTEGER
+        chunk_size:
+          parameterType: NUMBER_INTEGER
+        collection_name:
+          parameterType: STRING
+        filenames:
+          parameterType: STRING
+        pg_database:
+          parameterType: STRING
+        pg_host:
+          parameterType: STRING
+        pg_password:
+          parameterType: STRING
+        pg_port:
+          parameterType: STRING
+        pg_user:
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: NUMBER_INTEGER
+  comp-ingest-documents-2:
+    executorLabel: exec-ingest-documents-2
+    inputDefinitions:
+      parameters:
+        base_url:
+          parameterType: STRING
+        chunk_overlap:
+          parameterType: NUMBER_INTEGER
+        chunk_size:
+          parameterType: NUMBER_INTEGER
+        collection_name:
+          parameterType: STRING
+        filenames:
+          parameterType: STRING
+        pg_database:
+          parameterType: STRING
+        pg_host:
+          parameterType: STRING
+        pg_password:
+          parameterType: STRING
+        pg_port:
+          parameterType: STRING
+        pg_user:
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: NUMBER_INTEGER
+deploymentSpec:
+  executors:
+    exec-ingest-documents:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - ingest_documents
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'langchain-postgres>=0.0.13'\
+          \ 'langchain-community>=0.3.17' 'langchain-huggingface>=0.1.2' 'sentence-transformers>=3.3.1'\
+          \ 'psycopg[binary]>=3.2.3' 'pypdf>=5.1.0' 'requests>=2.32.3'  &&  python3\
+          \ -m pip install --quiet --no-warn-script-location 'kfp==2.16.1' '--no-deps'\
+          \ 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\
+          \n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef ingest_documents(\n    base_url: str,\n    filenames: str,\n\
+          \    collection_name: str,\n    pg_host: str,\n    pg_port: str,\n    pg_database:\
+          \ str,\n    pg_user: str,\n    pg_password: str,\n    chunk_size: int,\n\
+          \    chunk_overlap: int,\n) -> int:\n    \"\"\"Download PDFs, chunk them,\
+          \ embed with nomic-embed-text, and store in PGVector.\"\"\"\n    import\
+          \ os\n    import tempfile\n\n    import requests\n    from langchain_community.document_loaders\
+          \ import PyPDFLoader\n    from langchain_huggingface import HuggingFaceEmbeddings\n\
+          \    from langchain_postgres import PGEngine, PGVectorStore\n    from langchain_text_splitters\
+          \ import RecursiveCharacterTextSplitter\n\n    # Build document URLs from\
+          \ base_url + filenames\n    urls = [f\"{base_url.rstrip('/')}/{f.strip()}\"\
+          \ for f in filenames.split(\",\")]\n\n    # Download PDFs and load pages\n\
+          \    all_docs = []\n    for url in urls:\n        resp = requests.get(url,\
+          \ timeout=120)\n        resp.raise_for_status()\n\n        with tempfile.NamedTemporaryFile(suffix=\"\
+          .pdf\", delete=False) as tmp:\n            tmp.write(resp.content)\n   \
+          \         tmp_path = tmp.name\n\n        loader = PyPDFLoader(tmp_path)\n\
+          \        all_docs.extend(loader.load())\n        os.unlink(tmp_path)\n\n\
+          \    # Chunk\n    splitter = RecursiveCharacterTextSplitter(\n        chunk_size=chunk_size,\n\
+          \        chunk_overlap=chunk_overlap,\n    )\n    chunks = splitter.split_documents(all_docs)\n\
+          \n    # Tag each chunk with its collection\n    for chunk in chunks:\n \
+          \       chunk.metadata[\"collection\"] = collection_name\n\n    # Embed\
+          \ + store\n    embeddings = HuggingFaceEmbeddings(model_name=\"nomic-ai/nomic-embed-text-v1.5\"\
+          )\n\n    # Set app.current_role=admin via connection options so RLS allows\
+          \ writes\n    from urllib.parse import quote\n    connection_string = (\n\
+          \        f\"postgresql+psycopg://{pg_user}:{pg_password}\"\n        f\"\
+          @{pg_host}:{pg_port}/{pg_database}\"\n        f\"?options={quote('-c app.current_role=admin')}\"\
+          \n    )\n    engine = PGEngine.from_connection_string(url=connection_string)\n\
+          \n    store = PGVectorStore.create_sync(\n        engine=engine,\n     \
+          \   table_name=\"embeddings\",\n        embedding_service=embeddings,\n\
+          \        metadata_columns=[\"collection\"],\n    )\n    store.add_documents(chunks)\n\
+          \n    return len(chunks)\n\n"
+        image: registry.access.redhat.com/ubi9/python-312:latest
+    exec-ingest-documents-2:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - ingest_documents
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'langchain-postgres>=0.0.13'\
+          \ 'langchain-community>=0.3.17' 'langchain-huggingface>=0.1.2' 'sentence-transformers>=3.3.1'\
+          \ 'psycopg[binary]>=3.2.3' 'pypdf>=5.1.0' 'requests>=2.32.3'  &&  python3\
+          \ -m pip install --quiet --no-warn-script-location 'kfp==2.16.1' '--no-deps'\
+          \ 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\
+          \n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef ingest_documents(\n    base_url: str,\n    filenames: str,\n\
+          \    collection_name: str,\n    pg_host: str,\n    pg_port: str,\n    pg_database:\
+          \ str,\n    pg_user: str,\n    pg_password: str,\n    chunk_size: int,\n\
+          \    chunk_overlap: int,\n) -> int:\n    \"\"\"Download PDFs, chunk them,\
+          \ embed with nomic-embed-text, and store in PGVector.\"\"\"\n    import\
+          \ os\n    import tempfile\n\n    import requests\n    from langchain_community.document_loaders\
+          \ import PyPDFLoader\n    from langchain_huggingface import HuggingFaceEmbeddings\n\
+          \    from langchain_postgres import PGEngine, PGVectorStore\n    from langchain_text_splitters\
+          \ import RecursiveCharacterTextSplitter\n\n    # Build document URLs from\
+          \ base_url + filenames\n    urls = [f\"{base_url.rstrip('/')}/{f.strip()}\"\
+          \ for f in filenames.split(\",\")]\n\n    # Download PDFs and load pages\n\
+          \    all_docs = []\n    for url in urls:\n        resp = requests.get(url,\
+          \ timeout=120)\n        resp.raise_for_status()\n\n        with tempfile.NamedTemporaryFile(suffix=\"\
+          .pdf\", delete=False) as tmp:\n            tmp.write(resp.content)\n   \
+          \         tmp_path = tmp.name\n\n        loader = PyPDFLoader(tmp_path)\n\
+          \        all_docs.extend(loader.load())\n        os.unlink(tmp_path)\n\n\
+          \    # Chunk\n    splitter = RecursiveCharacterTextSplitter(\n        chunk_size=chunk_size,\n\
+          \        chunk_overlap=chunk_overlap,\n    )\n    chunks = splitter.split_documents(all_docs)\n\
+          \n    # Tag each chunk with its collection\n    for chunk in chunks:\n \
+          \       chunk.metadata[\"collection\"] = collection_name\n\n    # Embed\
+          \ + store\n    embeddings = HuggingFaceEmbeddings(model_name=\"nomic-ai/nomic-embed-text-v1.5\"\
+          )\n\n    # Set app.current_role=admin via connection options so RLS allows\
+          \ writes\n    from urllib.parse import quote\n    connection_string = (\n\
+          \        f\"postgresql+psycopg://{pg_user}:{pg_password}\"\n        f\"\
+          @{pg_host}:{pg_port}/{pg_database}\"\n        f\"?options={quote('-c app.current_role=admin')}\"\
+          \n    )\n    engine = PGEngine.from_connection_string(url=connection_string)\n\
+          \n    store = PGVectorStore.create_sync(\n        engine=engine,\n     \
+          \   table_name=\"embeddings\",\n        embedding_service=embeddings,\n\
+          \        metadata_columns=[\"collection\"],\n    )\n    store.add_documents(chunks)\n\
+          \n    return len(chunks)\n\n"
+        image: registry.access.redhat.com/ubi9/python-312:latest
+pipelineInfo:
+  description: Ingest RedBank PDFs into PGVector with admin/user collections
+  name: pgvector-rag-pipeline
+root:
+  dag:
+    tasks:
+      ingest-documents:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-ingest-documents
+        inputs:
+          parameters:
+            base_url:
+              componentInputParameter: base_url
+            chunk_overlap:
+              componentInputParameter: chunk_overlap
+            chunk_size:
+              componentInputParameter: chunk_size
+            collection_name:
+              runtimeValue:
+                constant: admin
+            filenames:
+              componentInputParameter: admin_filenames
+            pg_database:
+              componentInputParameter: pg_database
+            pg_host:
+              componentInputParameter: pg_host
+            pg_password:
+              componentInputParameter: pg_password
+            pg_port:
+              componentInputParameter: pg_port
+            pg_user:
+              componentInputParameter: pg_user
+        taskInfo:
+          name: ingest-documents
+      ingest-documents-2:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-ingest-documents-2
+        inputs:
+          parameters:
+            base_url:
+              componentInputParameter: base_url
+            chunk_overlap:
+              componentInputParameter: chunk_overlap
+            chunk_size:
+              componentInputParameter: chunk_size
+            collection_name:
+              runtimeValue:
+                constant: user
+            filenames:
+              componentInputParameter: user_filenames
+            pg_database:
+              componentInputParameter: pg_database
+            pg_host:
+              componentInputParameter: pg_host
+            pg_password:
+              componentInputParameter: pg_password
+            pg_port:
+              componentInputParameter: pg_port
+            pg_user:
+              componentInputParameter: pg_user
+        taskInfo:
+          name: ingest-documents-2
+  inputDefinitions:
+    parameters:
+      admin_filenames:
+        defaultValue: admin/redbank_compliance_procedures.pdf,admin/redbank_transaction_operations.pdf,admin/redbank_user_management.pdf
+        isOptional: true
+        parameterType: STRING
+      base_url:
+        defaultValue: https://raw.githubusercontent.com/opendatahub-io/agent-ops/main/demos/redbank-demo/langchain-pgvector/docs
+        isOptional: true
+        parameterType: STRING
+      chunk_overlap:
+        defaultValue: 200.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      chunk_size:
+        defaultValue: 1000.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      pg_database:
+        defaultValue: db
+        isOptional: true
+        parameterType: STRING
+      pg_host:
+        defaultValue: postgresql.redbank-demo.svc.cluster.local
+        isOptional: true
+        parameterType: STRING
+      pg_password:
+        defaultValue: app
+        isOptional: true
+        parameterType: STRING
+      pg_port:
+        defaultValue: '5432'
+        isOptional: true
+        parameterType: STRING
+      pg_user:
+        defaultValue: app
+        isOptional: true
+        parameterType: STRING
+      user_filenames:
+        defaultValue: user/redbank_account_selfservice.pdf,user/redbank_password_and_security.pdf,user/redbank_payments_and_transfers.pdf
+        isOptional: true
+        parameterType: STRING
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.16.1

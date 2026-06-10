@@ -1,0 +1,17 @@
+[project]
+name = "redbank_playground"
+version = "0.1.0"
+description = "Standalone chat playground UI for the RedBank Orchestrator agent."
+authors = [{ name = "Red Hat AI Engineering", email = "ai-engineering@redhat.com" }]
+license = { text = "MIT" }
+requires-python = ">=3.12,<=3.14"
+dependencies = [
+    "starlette>=0.46.0",
+    "uvicorn[standard]>=0.41.0",
+    "httpx>=0.28.0",
+    "python-dotenv>=1.2.2",
+]
+
+[build-system]
+requires = ["setuptools>=80.9.0"]
+build-backend = "setuptools.build_meta"

@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redbank-banking-agent
+  labels:
+    app.kubernetes.io/name: redbank-banking-agent
+    protocol.kagenti.io/a2a: ""
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redbank-banking-agent
+  template:
+    metadata:
+      labels:
+        app: redbank-banking-agent
+    spec:
+      containers:
+      - name: banking-agent
+        image: image-registry.openshift-image-registry.svc:5000/${NAMESPACE}/redbank-banking-agent:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8001
+          protocol: TCP
+        env:
+        - name: HOST
+          value: "0.0.0.0"
+        - name: PORT
+          value: "8001"
+        - name: MCP_SERVER_URL
+          value: "http://redbank-mcp-server:8000/mcp"
+        - name: AGENT_URL
+          value: "http://redbank-banking-agent:8001"
+        # LLM configuration — set LLM_BASE_URL to your vLLM or OpenAI-compatible endpoint.
+        - name: LLM_BASE_URL
+          value: "${LLM_BASE_URL}"
+        - name: LLM_MODEL
+          value: "${LLM_MODEL}"
+        # API key for the LLM endpoint (vLLM or OpenAI).
+        # Create the secret: oc create secret generic llm-credentials --from-literal=OPENAI_API_KEY=<key>
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: llm-credentials
+              key: OPENAI_API_KEY
+        # MLflow tracing — set to your OpenShift AI MLflow route.
+        # Omit or leave empty to disable remote tracking.
+        - name: MLFLOW_TRACKING_URI
+          value: "${MLFLOW_TRACKING_URI}"
+        - name: MLFLOW_TRACKING_INSECURE_TLS
+          value: "true"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redbank-banking-agent
+  labels:
+    protocol.kagenti.io/a2a: ""
+    kagenti.io/type: agent
+    app.kubernetes.io/name: redbank-banking-agent
+spec:
+  selector:
+    app: redbank-banking-agent
+  ports:
+  - name: http
+    port: 8001
+    targetPort: 8001
+    protocol: TCP
+  type: ClusterIP

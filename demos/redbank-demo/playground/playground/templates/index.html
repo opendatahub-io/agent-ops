@@ -1,0 +1,942 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Redbank Orchestrator — Playground</title>
+        <style>
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+
+            body {
+                font-family:
+                    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+                    sans-serif;
+                background: #f5f5f5;
+                height: 100vh;
+                display: flex;
+                flex-direction: column;
+            }
+
+            /* Header */
+            .header {
+                background: #1a1a2e;
+                color: #fff;
+                padding: 16px 24px;
+                font-size: 18px;
+                font-weight: 600;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }
+            .header .status-dot {
+                width: 10px;
+                height: 10px;
+                border-radius: 50%;
+                background: #888;
+            }
+            .header .status-dot.connected {
+                background: #4caf50;
+            }
+            .header .status-dot.error {
+                background: #f44336;
+            }
+            .header .spacer {
+                flex: 1;
+            }
+            .header .user-info {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                font-size: 13px;
+                font-weight: 400;
+            }
+            .header .user-info .username {
+                opacity: 0.85;
+            }
+            .header .user-info button {
+                background: rgba(255, 255, 255, 0.15);
+                color: #fff;
+                border: 1px solid rgba(255, 255, 255, 0.25);
+                padding: 4px 12px;
+                border-radius: 6px;
+                font-size: 12px;
+                cursor: pointer;
+                transition: background 0.2s;
+            }
+            .header .user-info button:hover {
+                background: rgba(255, 255, 255, 0.25);
+            }
+
+            /* Login screen */
+            .login-screen {
+                flex: 1;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 24px;
+            }
+            .login-card {
+                background: #fff;
+                border-radius: 16px;
+                box-shadow: 0 4px 24px rgba(0, 0, 0, 0.1);
+                padding: 40px;
+                width: 100%;
+                max-width: 400px;
+                text-align: center;
+            }
+            .login-card h2 {
+                font-size: 20px;
+                margin-bottom: 4px;
+                color: #1a1a2e;
+            }
+            .login-card .subtitle {
+                font-size: 13px;
+                color: #666;
+                margin-bottom: 24px;
+            }
+            .login-card button {
+                width: 100%;
+                padding: 12px;
+                background: #1a1a2e;
+                color: #fff;
+                border: none;
+                border-radius: 8px;
+                font-size: 14px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: background 0.2s;
+            }
+            .login-card button:hover {
+                background: #16213e;
+            }
+            .login-card button:disabled {
+                background: #ccc;
+                cursor: not-allowed;
+            }
+            .login-card .login-error {
+                background: #fee;
+                color: #c00;
+                border: 1px solid #fcc;
+                border-radius: 8px;
+                padding: 10px 14px;
+                font-size: 13px;
+                margin-bottom: 16px;
+                display: none;
+            }
+            .login-card .login-info {
+                font-size: 12px;
+                color: #999;
+                margin-top: 16px;
+            }
+
+            /* Chat area */
+            .chat-container {
+                flex: 1;
+                overflow-y: auto;
+                padding: 24px;
+                display: flex;
+                flex-direction: column;
+                gap: 16px;
+                position: relative;
+            }
+            .chat-container .watermark {
+                position: sticky;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                opacity: 0.08;
+                pointer-events: none;
+                z-index: 0;
+                margin: auto;
+                height: 0;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .chat-container .watermark img {
+                width: 280px;
+                height: auto;
+            }
+            .chat-container .message {
+                position: relative;
+                z-index: 1;
+            }
+
+            .message {
+                max-width: 75%;
+                padding: 12px 16px;
+                border-radius: 16px;
+                line-height: 1.5;
+                font-size: 14px;
+                word-wrap: break-word;
+                white-space: pre-wrap;
+            }
+
+            .message.user {
+                align-self: flex-end;
+                background: #1a1a2e;
+                color: #fff;
+                border-bottom-right-radius: 4px;
+            }
+
+            .message.assistant {
+                align-self: flex-start;
+                background: #fff;
+                color: #1a1a1a;
+                border-bottom-left-radius: 4px;
+                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            }
+
+            .message.assistant.streaming {
+                border-left: 3px solid #1a1a2e;
+            }
+
+            .message.error {
+                align-self: center;
+                background: #fee;
+                color: #c00;
+                border: 1px solid #fcc;
+                font-size: 13px;
+                max-width: 90%;
+            }
+
+            .message .meta {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 4px;
+            }
+            .message .label {
+                font-size: 11px;
+                font-weight: 600;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                opacity: 0.6;
+            }
+            .message .timestamp {
+                font-size: 10px;
+                opacity: 0.5;
+                font-variant-numeric: tabular-nums;
+            }
+
+            /* Typing indicator */
+            .typing-indicator {
+                display: inline-flex;
+                gap: 4px;
+                padding: 8px 0;
+            }
+            .typing-indicator span {
+                width: 6px;
+                height: 6px;
+                border-radius: 50%;
+                background: #999;
+                animation: blink 1.4s infinite both;
+            }
+            .typing-indicator span:nth-child(2) {
+                animation-delay: 0.2s;
+            }
+            .typing-indicator span:nth-child(3) {
+                animation-delay: 0.4s;
+            }
+            @keyframes blink {
+                0%,
+                80%,
+                100% {
+                    opacity: 0.3;
+                }
+                40% {
+                    opacity: 1;
+                }
+            }
+
+            /* Input area */
+            .input-area {
+                padding: 16px 24px;
+                background: #fff;
+                border-top: 1px solid #e0e0e0;
+                display: flex;
+                gap: 12px;
+            }
+
+            .input-area textarea {
+                flex: 1;
+                padding: 12px 16px;
+                border: 1px solid #ddd;
+                border-radius: 12px;
+                font-size: 14px;
+                font-family: inherit;
+                resize: none;
+                outline: none;
+                min-height: 48px;
+                max-height: 120px;
+            }
+            .input-area textarea:focus {
+                border-color: #1a1a2e;
+            }
+
+            .input-area button {
+                padding: 0 24px;
+                background: #1a1a2e;
+                color: #fff;
+                border: none;
+                border-radius: 12px;
+                font-size: 14px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: background 0.2s;
+            }
+            .input-area button:hover {
+                background: #16213e;
+            }
+            .input-area button:disabled {
+                background: #ccc;
+                cursor: not-allowed;
+            }
+
+            .hidden {
+                display: none !important;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <div class="status-dot" id="statusDot"></div>
+            Redbank Orchestrator — Playground
+            <div class="spacer"></div>
+            <div class="user-info hidden" id="userInfo">
+                <span class="username" id="usernameDisplay"></span>
+                <button onclick="logout()">Logout</button>
+            </div>
+        </div>
+
+        <!-- Login screen -->
+        <div class="login-screen hidden" id="loginScreen">
+            <div class="login-card">
+                <h2>Sign In</h2>
+                <div class="subtitle">Authenticate with Keycloak to start chatting</div>
+                <div class="login-error" id="loginError"></div>
+                <button id="loginBtn" onclick="redirectToKeycloak()">
+                    Sign in with Keycloak
+                </button>
+                <div class="login-info">
+                    You will be redirected to Keycloak to sign in.
+                </div>
+            </div>
+        </div>
+
+        <!-- Chat UI (hidden until authenticated) -->
+        <div class="chat-container hidden" id="chat">
+            <div class="watermark">
+                <img src="/images/rh_logo.svg" alt="" />
+            </div>
+        </div>
+
+        <div class="input-area hidden" id="inputArea">
+            <textarea
+                id="input"
+                placeholder="Type your message..."
+                rows="1"
+                onkeydown="
+                    if (event.key === 'Enter' && !event.shiftKey) {
+                        event.preventDefault();
+                        sendMessage();
+                    }
+                "
+            ></textarea>
+            <button id="sendBtn" onclick="sendMessage()">Send</button>
+        </div>
+
+        <script>
+            /* ── DOM refs ──────────────────────────────────────────── */
+            const chat = document.getElementById("chat");
+            const input = document.getElementById("input");
+            const sendBtn = document.getElementById("sendBtn");
+            const statusDot = document.getElementById("statusDot");
+            const loginScreen = document.getElementById("loginScreen");
+            const loginError = document.getElementById("loginError");
+            const loginBtn = document.getElementById("loginBtn");
+            const userInfo = document.getElementById("userInfo");
+            const usernameDisplay = document.getElementById("usernameDisplay");
+            const inputArea = document.getElementById("inputArea");
+
+            /* ── Auth state ────────────────────────────────────────── */
+            let authConfig = null; // { enabled, url, realm, clientId }
+            let accessToken = null;
+            let refreshToken = null;
+            let tokenExpiresAt = 0; // epoch ms
+            let refreshTimerId = null;
+            let currentUsername = null;
+
+            const conversationHistory = [];
+
+            /* ── PKCE helpers ──────────────────────────────────────── */
+            function generateRandomString(length) {
+                const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+                const values = crypto.getRandomValues(new Uint8Array(length));
+                return Array.from(values, (v) => charset[v % charset.length]).join("");
+            }
+
+            async function sha256(plain) {
+                const encoder = new TextEncoder();
+                const data = encoder.encode(plain);
+                return await crypto.subtle.digest("SHA-256", data);
+            }
+
+            function base64UrlEncode(buffer) {
+                const bytes = new Uint8Array(buffer);
+                let str = "";
+                bytes.forEach((b) => (str += String.fromCharCode(b)));
+                return btoa(str).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+            }
+
+            async function generateCodeChallenge(verifier) {
+                const hashed = await sha256(verifier);
+                return base64UrlEncode(hashed);
+            }
+
+            /* ── Decode JWT to get username ────────────────────────── */
+            function decodeJwtPayload(token) {
+                try {
+                    const base64Url = token.split(".")[1];
+                    const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
+                    const jsonPayload = decodeURIComponent(
+                        atob(base64)
+                            .split("")
+                            .map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
+                            .join(""),
+                    );
+                    return JSON.parse(jsonPayload);
+                } catch (e) {
+                    return {};
+                }
+            }
+
+            /* ── Bootstrap ─────────────────────────────────────────── */
+            async function init() {
+                checkHealth();
+
+                try {
+                    const resp = await fetch("/auth/config");
+                    authConfig = await resp.json();
+                } catch (e) {
+                    console.warn("Failed to fetch auth config, running without auth:", e);
+                    authConfig = { enabled: false };
+                }
+
+                if (!authConfig.enabled) {
+                    // No Keycloak configured — skip login, show chat directly
+                    showChat(null);
+                    return;
+                }
+
+                // Check if this is an OAuth callback (URL has ?code=...)
+                const params = new URLSearchParams(window.location.search);
+                const code = params.get("code");
+                const state = params.get("state");
+                const error = params.get("error");
+
+                if (error) {
+                    // Keycloak returned an error
+                    const desc = params.get("error_description") || error;
+                    showLoginError(desc);
+                    cleanUrl();
+                    return;
+                }
+
+                if (code && state) {
+                    // OAuth callback — exchange code for token
+                    await handleOAuthCallback(code, state);
+                    return;
+                }
+
+                // Check for existing session in sessionStorage
+                const saved = sessionStorage.getItem("rb_auth");
+                if (saved) {
+                    try {
+                        const session = JSON.parse(saved);
+                        if (session.expiresAt > Date.now() + 10000) {
+                            accessToken = session.accessToken;
+                            refreshToken = session.refreshToken;
+                            tokenExpiresAt = session.expiresAt;
+                            currentUsername = session.username;
+                            scheduleTokenRefresh();
+                            showChat(currentUsername);
+                            return;
+                        }
+                        // Token expired but we have a refresh token — try refresh
+                        if (session.refreshToken) {
+                            const ok = await doRefreshToken(session.refreshToken);
+                            if (ok) {
+                                showChat(currentUsername);
+                                return;
+                            }
+                        }
+                    } catch (e) {
+                        console.warn("Saved session invalid:", e);
+                    }
+                    sessionStorage.removeItem("rb_auth");
+                }
+
+                // Show login screen
+                loginScreen.classList.remove("hidden");
+            }
+
+            init();
+
+            /* ── Redirect to Keycloak ──────────────────────────────── */
+            async function redirectToKeycloak() {
+                loginBtn.disabled = true;
+                loginBtn.textContent = "Redirecting...";
+
+                // Generate PKCE code verifier + challenge
+                const codeVerifier = generateRandomString(64);
+                const codeChallenge = await generateCodeChallenge(codeVerifier);
+
+                // Generate state for CSRF protection
+                const state = generateRandomString(32);
+
+                // Store PKCE verifier + state so we can use them on callback
+                sessionStorage.setItem(
+                    "rb_pkce",
+                    JSON.stringify({ codeVerifier, state }),
+                );
+
+                const redirectUri = window.location.origin + window.location.pathname;
+                const authUrl =
+                    `${authConfig.url}/realms/${authConfig.realm}/protocol/openid-connect/auth` +
+                    `?client_id=${encodeURIComponent(authConfig.clientId)}` +
+                    `&response_type=code` +
+                    `&scope=openid` +
+                    `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+                    `&state=${encodeURIComponent(state)}` +
+                    `&code_challenge=${encodeURIComponent(codeChallenge)}` +
+                    `&code_challenge_method=S256`;
+
+                // Navigate to Keycloak login page
+                window.location.href = authUrl;
+            }
+
+            /* ── OAuth callback handler ────────────────────────────── */
+            async function handleOAuthCallback(code, state) {
+                // Retrieve stored PKCE data
+                const stored = sessionStorage.getItem("rb_pkce");
+                if (!stored) {
+                    showLoginError("Login session expired. Please try again.");
+                    cleanUrl();
+                    return;
+                }
+
+                const pkce = JSON.parse(stored);
+                sessionStorage.removeItem("rb_pkce");
+
+                // Verify state matches (CSRF protection)
+                if (pkce.state !== state) {
+                    showLoginError("Invalid login state. Please try again.");
+                    cleanUrl();
+                    return;
+                }
+
+                const redirectUri = window.location.origin + window.location.pathname;
+
+                try {
+                    // Exchange code for token via our backend proxy (no CORS issues)
+                    const resp = await fetch("/auth/token", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            grant_type: "authorization_code",
+                            code: code,
+                            redirect_uri: redirectUri,
+                            code_verifier: pkce.codeVerifier,
+                        }),
+                    });
+
+                    const tokenResp = await resp.json();
+
+                    if (!resp.ok) {
+                        const detail = tokenResp.error_description || tokenResp.error || tokenResp.detail || "Token exchange failed";
+                        showLoginError(detail);
+                        cleanUrl();
+                        return;
+                    }
+
+                    // Extract username from JWT
+                    const payload = decodeJwtPayload(tokenResp.access_token);
+                    const username = payload.preferred_username || payload.sub || "user";
+
+                    saveSession(tokenResp, username);
+                    cleanUrl();
+                    showChat(username);
+                } catch (e) {
+                    console.error("Token exchange failed:", e);
+                    showLoginError("Failed to complete login: " + e.message);
+                    cleanUrl();
+                }
+            }
+
+            /* ── Clean URL after OAuth callback ────────────────────── */
+            function cleanUrl() {
+                const url = window.location.origin + window.location.pathname;
+                window.history.replaceState({}, document.title, url);
+            }
+
+            /* ── Token management ──────────────────────────────────── */
+            function saveSession(tokenResp, username) {
+                accessToken = tokenResp.access_token;
+                refreshToken = tokenResp.refresh_token || null;
+                currentUsername = username;
+                // expires_in is in seconds; give ourselves a 10s buffer
+                tokenExpiresAt = Date.now() + (tokenResp.expires_in - 10) * 1000;
+
+                sessionStorage.setItem(
+                    "rb_auth",
+                    JSON.stringify({
+                        accessToken,
+                        refreshToken,
+                        expiresAt: tokenExpiresAt,
+                        username: currentUsername,
+                    }),
+                );
+
+                scheduleTokenRefresh();
+            }
+
+            function scheduleTokenRefresh() {
+                if (refreshTimerId) clearTimeout(refreshTimerId);
+                if (!refreshToken) return;
+
+                // Refresh 30s before expiry, minimum 5s from now
+                const delay = Math.max(tokenExpiresAt - Date.now() - 30000, 5000);
+                refreshTimerId = setTimeout(async () => {
+                    const ok = await doRefreshToken(refreshToken);
+                    if (!ok) {
+                        logout();
+                    }
+                }, delay);
+            }
+
+            async function doRefreshToken(rToken) {
+                try {
+                    const resp = await fetch("/auth/token", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            grant_type: "refresh_token",
+                            refresh_token: rToken,
+                        }),
+                    });
+                    if (!resp.ok) return false;
+
+                    const tokenResp = await resp.json();
+                    saveSession(tokenResp, currentUsername);
+                    console.log("Token refreshed successfully");
+                    return true;
+                } catch (e) {
+                    console.error("Token refresh failed:", e);
+                    return false;
+                }
+            }
+
+            /* ── Login / logout ────────────────────────────────────── */
+            function showLoginError(msg) {
+                loginScreen.classList.remove("hidden");
+                loginError.textContent = msg;
+                loginError.style.display = "block";
+                loginBtn.disabled = false;
+                loginBtn.textContent = "Sign in with Keycloak";
+            }
+
+            function showChat(username) {
+                loginScreen.classList.add("hidden");
+                chat.classList.remove("hidden");
+                inputArea.classList.remove("hidden");
+
+                if (username) {
+                    usernameDisplay.textContent = username;
+                    userInfo.classList.remove("hidden");
+                }
+
+                input.focus();
+            }
+
+            function logout() {
+                if (refreshTimerId) clearTimeout(refreshTimerId);
+                accessToken = null;
+                refreshToken = null;
+                tokenExpiresAt = 0;
+                currentUsername = null;
+                sessionStorage.removeItem("rb_auth");
+
+                // Clear conversation
+                conversationHistory.length = 0;
+                while (chat.children.length > 1) {
+                    chat.removeChild(chat.lastChild);
+                }
+
+                if (authConfig && authConfig.enabled) {
+                    // Redirect to Keycloak logout, then back to our app
+                    const redirectUri = window.location.origin + window.location.pathname;
+                    const logoutUrl =
+                        `${authConfig.url}/realms/${authConfig.realm}/protocol/openid-connect/logout` +
+                        `?client_id=${encodeURIComponent(authConfig.clientId)}` +
+                        `&post_logout_redirect_uri=${encodeURIComponent(redirectUri)}`;
+                    window.location.href = logoutUrl;
+                }
+            }
+
+            /* ── Health check ──────────────────────────────────────── */
+            async function checkHealth() {
+                try {
+                    const resp = await fetch("/health");
+                    const data = await resp.json();
+                    if (data.status === "healthy" && data.agent_initialized) {
+                        statusDot.className = "status-dot connected";
+                        console.log("Agent connected:", data);
+                    } else {
+                        statusDot.className = "status-dot error";
+                        console.warn("Agent not ready:", data);
+                    }
+                } catch (e) {
+                    statusDot.className = "status-dot error";
+                    console.error("Health check failed:", e);
+                }
+            }
+
+            /* ── Chat helpers ──────────────────────────────────────── */
+            function formatTimestamp() {
+                const now = new Date();
+                const pad = (n) => String(n).padStart(2, "0");
+                return `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())} - ${now.getFullYear()}.${pad(now.getMonth() + 1)}.${pad(now.getDate())}`;
+            }
+
+            function addMessage(role, content, extra) {
+                const div = document.createElement("div");
+                div.className = `message ${role}`;
+                if (extra) div.classList.add(extra);
+
+                const meta = document.createElement("div");
+                meta.className = "meta";
+
+                const label = document.createElement("div");
+                label.className = "label";
+                label.textContent =
+                    role === "user"
+                        ? currentUsername || "You"
+                        : role === "error"
+                          ? "Error"
+                          : "Agent";
+                meta.appendChild(label);
+
+                const ts = document.createElement("div");
+                ts.className = "timestamp";
+                ts.textContent = formatTimestamp();
+                meta.appendChild(ts);
+
+                div.appendChild(meta);
+
+                const text = document.createElement("div");
+                text.textContent = content;
+                div.appendChild(text);
+
+                chat.appendChild(div);
+                chat.scrollTop = chat.scrollHeight;
+                return text;
+            }
+
+            function addTypingIndicator() {
+                const div = document.createElement("div");
+                div.className = "message assistant streaming";
+                div.id = "typing";
+
+                const label = document.createElement("div");
+                label.className = "label";
+                label.textContent = "Agent";
+                div.appendChild(label);
+
+                const indicator = document.createElement("div");
+                indicator.className = "typing-indicator";
+                indicator.innerHTML = "<span></span><span></span><span></span>";
+                div.appendChild(indicator);
+
+                chat.appendChild(div);
+                chat.scrollTop = chat.scrollHeight;
+            }
+
+            function removeTypingIndicator() {
+                const el = document.getElementById("typing");
+                if (el) el.remove();
+            }
+
+            function setLoading(loading) {
+                sendBtn.disabled = loading;
+                input.disabled = loading;
+            }
+
+            /* ── Send message ──────────────────────────────────────── */
+            async function sendMessage() {
+                const text = input.value.trim();
+                if (!text) return;
+
+                input.value = "";
+                input.style.height = "auto";
+                addMessage("user", text);
+                conversationHistory.push({ role: "user", content: text });
+
+                setLoading(true);
+                addTypingIndicator();
+
+                let assistantContent = "";
+                let textEl = null;
+
+                try {
+                    // Build headers — include Bearer token if authenticated
+                    const headers = { "Content-Type": "application/json" };
+                    if (accessToken) {
+                        headers["Authorization"] = `Bearer ${accessToken}`;
+                    }
+
+                    const response = await fetch("/chat/completions", {
+                        method: "POST",
+                        headers: headers,
+                        body: JSON.stringify({
+                            messages: conversationHistory,
+                            stream: true,
+                        }),
+                    });
+
+                    console.log("Response status:", response.status);
+
+                    if (response.status === 401 || response.status === 403) {
+                        removeTypingIndicator();
+                        addMessage("error", "Session expired. Please log in again.");
+                        logout();
+                        setLoading(false);
+                        return;
+                    }
+
+                    if (!response.ok) {
+                        removeTypingIndicator();
+                        const errorText = await response.text();
+                        console.error(
+                            "HTTP error:",
+                            response.status,
+                            errorText,
+                        );
+                        addMessage(
+                            "error",
+                            `HTTP ${response.status}: ${errorText}`,
+                        );
+                        setLoading(false);
+                        return;
+                    }
+
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = "";
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) {
+                            console.log("Stream done");
+                            break;
+                        }
+
+                        const chunk = decoder.decode(value, { stream: true });
+                        console.log("Raw chunk:", chunk);
+                        buffer += chunk;
+
+                        const parts = buffer.split("\n\n");
+                        buffer = parts.pop();
+
+                        for (const part of parts) {
+                            const lines = part.split("\n");
+                            for (const line of lines) {
+                                if (!line.startsWith("data: ")) continue;
+                                const payload = line.slice(6).trim();
+                                if (payload === "[DONE]") {
+                                    console.log("Received [DONE]");
+                                    continue;
+                                }
+
+                                try {
+                                    const parsed = JSON.parse(payload);
+                                    console.log("Parsed SSE:", parsed);
+
+                                    // Handle error responses
+                                    if (parsed.error) {
+                                        removeTypingIndicator();
+                                        addMessage(
+                                            "error",
+                                            parsed.error.message ||
+                                                "Unknown error",
+                                        );
+                                        setLoading(false);
+                                        return;
+                                    }
+
+                                    const delta = parsed.choices?.[0]?.delta;
+                                    if (delta?.content) {
+                                        if (!textEl) {
+                                            removeTypingIndicator();
+                                            textEl = addMessage(
+                                                "assistant",
+                                                "",
+                                                "streaming",
+                                            );
+                                        }
+                                        assistantContent += delta.content;
+                                        textEl.textContent = assistantContent;
+                                        chat.scrollTop = chat.scrollHeight;
+                                    }
+                                } catch (e) {
+                                    console.warn(
+                                        "Failed to parse SSE line:",
+                                        payload,
+                                        e,
+                                    );
+                                }
+                            }
+                        }
+                    }
+
+                    // Remove streaming indicator
+                    if (textEl) {
+                        textEl.parentElement.classList.remove("streaming");
+                    } else {
+                        removeTypingIndicator();
+                        if (!assistantContent) {
+                            addMessage(
+                                "error",
+                                "Agent returned empty response. Check the agent terminal for errors.",
+                            );
+                        }
+                    }
+
+                    if (assistantContent) {
+                        conversationHistory.push({
+                            role: "assistant",
+                            content: assistantContent,
+                        });
+                    }
+                } catch (err) {
+                    console.error("Fetch error:", err);
+                    removeTypingIndicator();
+                    addMessage("error", `Connection error: ${err.message}`);
+                }
+
+                setLoading(false);
+                input.focus();
+            }
+
+            // Auto-resize textarea
+            input.addEventListener("input", function () {
+                this.style.height = "auto";
+                this.style.height = Math.min(this.scrollHeight, 120) + "px";
+            });
+        </script>
+    </body>
+</html>

@@ -1,0 +1,12 @@
+langchain-postgres>=0.0.13
+langchain-community>=0.3.17
+langchain-huggingface>=0.1.2
+sentence-transformers>=3.3.1
+psycopg[binary]>=3.2.3
+kfp>=2.10.1
+pypdf>=5.1.0
+requests>=2.32.3
+
+# testing
+pytest>=8.3.4
+testcontainers[postgres]>=4.9.0

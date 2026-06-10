@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redbank-mcp-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redbank-mcp-server
+  template:
+    metadata:
+      labels:
+        app: redbank-mcp-server
+    spec:
+      containers:
+      - name: mcp-server
+        image: image-registry.openshift-image-registry.svc:5000/${NAMESPACE}/redbank-mcp-server:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+          protocol: TCP
+        env:
+        - name: POSTGRES_HOST
+          value: "postgresql"
+        - name: POSTGRES_PORT
+          value: "5432"
+        - name: POSTGRES_DATABASE
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-credentials
+              key: POSTGRESQL_DATABASE
+        - name: POSTGRES_USER
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-credentials
+              key: POSTGRESQL_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgresql-credentials
+              key: POSTGRESQL_PASSWORD
+        # JWT verification via Keycloak JWKS endpoint.
+        # With AuthBridge sidecar: set JWT_VERIFY=false (sidecar validates upstream).
+        # Without AuthBridge: set JWT_VERIFY=true to verify signatures directly.
+        - name: JWT_VERIFY
+          value: "true"
+        - name: JWT_ALGORITHMS
+          value: "RS256"
+        # Auto-detected by deploy.sh from 'oc get route keycloak'.
+        # Override: KEYCLOAK_HOST=keycloak.example.com bash deploy.sh
+        - name: JWKS_URL
+          value: "https://${KEYCLOAK_HOST}/realms/redbank/protocol/openid-connect/certs"
+        # Keycloak public clients default aud to "account".
+        # setup-keycloak.sh adds an audience mapper so tokens also contain "redbank-mcp".
+        # Change this to "redbank-mcp" once the mapper is applied.
+        - name: JWT_AUDIENCE
+          value: "account"
+        - name: ADMIN_ROLE_CLAIM
+          value: "admin"
+        # Default identity when no Bearer token is present (local dev only).
+        # In production with AuthBridge, unauthenticated requests never reach this container.
+        - name: DEFAULT_ROLE
+          value: "user"
+        - name: DEFAULT_EMAIL
+          value: "jane@redbank.demo"
+        # PGVector knowledge base — connects as the non-superuser 'app' role
+        # so that RLS policies on the embeddings table are enforced.
+        - name: PGVECTOR_USER
+          valueFrom:
+            secretKeyRef:
+              name: pgvector-credentials
+              key: PGVECTOR_USER
+        - name: PGVECTOR_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: pgvector-credentials
+              key: PGVECTOR_PASSWORD
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redbank-mcp-server
+  labels:
+    protocol.kagenti.io/mcp: "true"
+spec:
+  selector:
+    app: redbank-mcp-server
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8000
+    protocol: TCP
+  type: ClusterIP

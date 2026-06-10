@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redbank-knowledge-agent
+  labels:
+    app.kubernetes.io/name: redbank-knowledge-agent
+    protocol.kagenti.io/a2a: ""
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redbank-knowledge-agent
+  template:
+    metadata:
+      labels:
+        app: redbank-knowledge-agent
+    spec:
+      containers:
+      - name: knowledge-agent
+        image: image-registry.openshift-image-registry.svc:5000/${NAMESPACE}/redbank-knowledge-agent:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8002
+          protocol: TCP
+        env:
+        - name: HOST
+          value: "0.0.0.0"
+        - name: PORT
+          value: "8002"
+        - name: MCP_SERVER_URL
+          value: "http://redbank-mcp-server:8000/mcp"
+        - name: AGENT_URL
+          value: "http://redbank-knowledge-agent:8002"
+        - name: LLM_BASE_URL
+          value: "${LLM_BASE_URL}"
+        - name: LLM_MODEL
+          value: "${LLM_MODEL}"
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: llm-credentials
+              key: OPENAI_API_KEY
+        - name: MLFLOW_TRACKING_URI
+          value: "${MLFLOW_TRACKING_URI}"
+        - name: MLFLOW_TRACKING_INSECURE_TLS
+          value: "true"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redbank-knowledge-agent
+  labels:
+    protocol.kagenti.io/a2a: ""
+    app.kubernetes.io/name: redbank-knowledge-agent
+spec:
+  selector:
+    app: redbank-knowledge-agent
+  ports:
+  - name: http
+    port: 8002
+    targetPort: 8002
+    protocol: TCP
+  type: ClusterIP
