@@ -328,9 +328,10 @@ All deployment is driven through a single top-level `Makefile` and `.env` file. 
 
 - OpenShift cluster with `oc` CLI authenticated
 - OpenShift AI > 3.4 installed
-- Keycloak deployed (the setup script provisions a realm and demo users)
+- Kagenti platform deployed (includes Keycloak, operator, and platform services - see [Kagenti Installation Guide](https://github.com/kagenti/kagenti/blob/main/docs/install.md#openshift-installation))
 - `helm` CLI installed (for orchestrator and playground)
-- An OpenAI-compatible LLM endpoint (e.g. vLLM)
+- Python with pinned `kfp` installed (e.g. `pip install "kfp==2.16.1"`) for compiling the RAG pipeline
+- An OpenAI-compatible LLM endpoint (e.g. vLLM, Ollama)
 
 ### Quick Start
 
