@@ -1,7 +1,0 @@
-nameOverride: "redbank-playground"
-
-env:
-  ORCHESTRATOR_URL: ""
-  KEYCLOAK_URL: ""
-  KEYCLOAK_REALM: ""
-  KEYCLOAK_CLIENT_ID: ""
