@@ -168,7 +168,7 @@ CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 \
 claude --bare
 ```
 
-This routes model traffic through the gateway instead of Anthropic directly, so it can inject your real Vertex AI credentials. `--bare` skips login since auth is already handled by the provider. Other agents follow the same pattern; see [Supported Agents](https://docs.nvidia.com/openshell/latest/about/supported-agents).
+This routes model traffic through the gateway instead of Anthropic directly, so it can inject your real Vertex AI credentials. `--bare` skips login since auth is already handled by the provider. `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` prevents Claude Code from sending beta headers that the proxy doesn't yet pass through cleanly. Other agents follow the same pattern; see [Supported Agents](https://docs.nvidia.com/openshell/latest/about/supported-agents).
 
 ## Egress Policy Update
 
@@ -221,6 +221,10 @@ openshell policy get my-sandbox --full
 ```
 
 
+
+## Known Limitations
+
+**Privileged SCC requirement.** The sandbox pod runs with the `privileged` Security Context Constraint. This is needed because the supervisor sets up its own network namespace, nftables rules, and Landlock LSM policies for the agent process. Operations that require elevated kernel capabilities. This is a meaningful security exposure; for GA, we plan to replace it with a custom, narrowly-scoped permission set or similar. Until then, treat this install path as experimental and do not use it in production.
 
 ## Uninstallation
 
