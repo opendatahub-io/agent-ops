@@ -12,7 +12,6 @@ Usage:
 """
 
 import argparse
-import json
 import os
 import sys
 
@@ -54,6 +53,7 @@ def main() -> None:
         params={"experiment_name": args.experiment},
         headers=headers,
         verify=verify_tls,
+        timeout=10,
     )
     if resp.status_code != 200:
         print(f"Experiment '{args.experiment}' not found: {resp.text}")
@@ -69,6 +69,7 @@ def main() -> None:
         params={"experiment_ids": exp_id, "max_results": 20},
         headers=headers,
         verify=verify_tls,
+        timeout=10,
     )
     if resp.status_code != 200:
         print(f"Failed to fetch traces: {resp.text}")
