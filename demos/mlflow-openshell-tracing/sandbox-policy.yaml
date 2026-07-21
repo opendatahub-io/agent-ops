@@ -29,11 +29,9 @@ network_policies:
     endpoints:
       - { host: pypi.org, port: 443 }
       - { host: files.pythonhosted.org, port: 443 }
-    binaries:
-      - path: /usr/bin/python3.13
 
   # Allow the MLflow SDK to send traces to the RHOAI MLflow tracking server.
-  # Adjust the host to match your cluster's MLflow route or internal service.
+  # Adjust the host and port to match your cluster's MLflow route or service.
   #
   # Option A: OpenShift route (external)
   # mlflow:
@@ -41,8 +39,6 @@ network_policies:
   #   endpoints:
   #     - host: mlflow-redhat-ods-applications.apps.<cluster-domain>
   #       port: 443
-  #   binaries:
-  #     - path: /usr/bin/python3.13
   #
   # Option B: Cluster-internal service
   mlflow:
@@ -50,5 +46,3 @@ network_policies:
     endpoints:
       - host: mlflow.redhat-ods-applications.svc
         port: 8443
-    binaries:
-      - path: /usr/bin/python3.13
