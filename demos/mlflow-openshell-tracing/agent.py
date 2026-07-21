@@ -30,12 +30,29 @@ MESSAGES = [
 ]
 
 
+def _patch_mlflow_workspace_header(workspace: str) -> None:
+    """Inject X-MLflow-Workspace header into all MLflow REST requests."""
+    import mlflow.utils.rest_utils as rest
+
+    _original = rest.http_request
+
+    def _patched(host_creds, endpoint, method, **kwargs):
+        headers = kwargs.pop("extra_headers", {}) or {}
+        headers["X-MLflow-Workspace"] = workspace
+        return _original(host_creds, endpoint, method, extra_headers=headers, **kwargs)
+
+    rest.http_request = _patched
+
+
 def configure_tracing() -> bool:
     """Enable MLflow tracing if MLFLOW_TRACKING_URI is set."""
     tracking_uri = os.environ.get("MLFLOW_TRACKING_URI")
     if not tracking_uri:
         logger.info("MLFLOW_TRACKING_URI not set — tracing disabled")
         return False
+
+    workspace = os.environ.get("MLFLOW_WORKSPACE", "default")
+    _patch_mlflow_workspace_header(workspace)
 
     import mlflow
     import mlflow.openai
@@ -49,7 +66,8 @@ def configure_tracing() -> bool:
     mlflow.config.enable_async_logging()
     mlflow.openai.autolog()
 
-    logger.info("MLflow tracing enabled — %s (experiment: %s)", tracking_uri, experiment_name)
+    logger.info("MLflow tracing enabled — %s (experiment: %s, workspace: %s)",
+                tracking_uri, experiment_name, workspace)
     return True
 
 
