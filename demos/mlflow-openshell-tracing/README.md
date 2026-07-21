@@ -1,6 +1,6 @@
 # MLflow Tracing from OpenShell Sandboxes on RHOAI
 
-Capture MLflow traces from AI agents running in [OpenShell](https://docs.openshell.dev) sandboxes, with traces stored in the managed MLflow instance on Red Hat OpenShift AI (RHOAI).
+Capture MLflow traces from AI agents running in [OpenShell](https://docs.nvidia.com/openshell/latest) sandboxes, with traces stored in the managed MLflow instance on Red Hat OpenShift AI (RHOAI).
 
 ## Architecture
 
@@ -19,10 +19,10 @@ Capture MLflow traces from AI agents running in [OpenShell](https://docs.openshe
 │  │     └── mlflow.openai.autolog()                             │ │
 │  │              │                                              │ │
 │  └──────────────┼──────────────────────────────────────────────┘ │
-│                 │  MLFLOW_TRACKING_URI                            │
+│                 │  MLFLOW_TRACKING_URI (via --env)                │
 │                 ▼                                                 │
 │  ┌────────────────────────────┐                                  │
-│  │  MLflow Tracking Server    │                                  │
+│  │  MLflow Tracking Server    │◄── reencrypt Route               │
 │  │  (RHOAI managed)           │                                  │
 │  │  redhat-ods-applications   │                                  │
 │  └────────────────────────────┘                                  │
@@ -34,6 +34,7 @@ Capture MLflow traces from AI agents running in [OpenShell](https://docs.openshe
 - **inference.local** — OpenShell intercepts OpenAI SDK calls and routes them through the configured inference provider. The agent code never touches model credentials directly.
 - **mlflow.openai.autolog()** — MLflow auto-instruments all OpenAI SDK calls, capturing request/response pairs as traces with zero code changes.
 - **MLFLOW_TRACKING_URI** — Passed into the sandbox via `--env` so the MLflow SDK can send traces to the tracking server.
+- **Network policy** — Sandbox egress is denied by default. Use `openshell policy update` to allow traffic to the MLflow route.
 
 ## Prerequisites
 
@@ -41,13 +42,27 @@ Capture MLflow traces from AI agents running in [OpenShell](https://docs.openshe
 |-----------|-------------|
 | **OpenShift** | 4.14+ cluster with cluster-admin access |
 | **RHOAI** | Installed with MLflow Tracking Server deployed ([install guide](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed)) |
-| **OpenShell** | CLI installed locally ([install docs](https://docs.openshell.dev/getting-started/installation)) |
+| **OpenShell** | CLI v0.0.85 installed locally ([install docs](https://docs.nvidia.com/openshell/latest/get-started/quickstart)) |
 | **Inference** | Model provider configured (MaaS, vLLM, or other OpenAI-compatible endpoint) |
 | **Tools** | `oc`, `helm`, `openshell` CLIs |
 
-## 1. Deploy OpenShell on OpenShift
+## 1. Install Agent Sandbox CRDs
 
-> **Note:** OpenShell on OpenShift is experimental. It requires a privileged SCC and TLS disabled on the gateway.
+OpenShell requires the [Agent Sandbox](https://agent-sandbox.sigs.k8s.io) Kubernetes SIG project. Install the CRDs and controller before the OpenShell chart:
+
+```bash
+kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/latest/download/sandbox.yaml
+```
+
+Confirm the controller is running:
+
+```bash
+kubectl -n agent-sandbox-system get pods
+```
+
+## 2. Deploy OpenShell on OpenShift
+
+> **Note:** OpenShell on OpenShift is experimental. It requires a privileged SCC and runs with TLS disabled on the gateway.
 
 Create the namespace and grant the required security context:
 
@@ -61,11 +76,13 @@ oc adm policy add-scc-to-user privileged \
 Install the OpenShell Helm chart with OpenShift overrides:
 
 ```bash
-helm install openshell oci://ghcr.io/open-shell/openshell/helm/openshell \
-  -n openshell \
+helm install openshell oci://ghcr.io/nvidia/openshell/helm-chart \
+  --version 0.0.85 \
+  --namespace openshell \
   --set server.disableTls=true \
   --set podSecurityContext.fsGroup=null \
-  --set securityContext.runAsUser=null
+  --set securityContext.runAsUser=null \
+  --set server.auth.allowUnauthenticatedUsers=true
 ```
 
 Wait for the gateway to be ready:
@@ -81,18 +98,24 @@ oc -n openshell port-forward svc/openshell 8080:8080 &
 openshell gateway add http://127.0.0.1:8080 --local --name openshift
 ```
 
-## 2. Configure Inference Routing
+## 3. Configure Inference Routing
 
-Set up a model provider (example using MaaS):
+Enable the v2 provider pipeline:
+
+```bash
+openshell settings set --global --key providers_v2_enabled --value true --yes
+```
+
+Register your model provider. Example using a direct vLLM/OpenAI-compatible endpoint:
 
 ```bash
 openshell provider create \
-  --name maas \
+  --name my-provider \
   --type openai \
   --credential OPENAI_API_KEY=<your-api-key> \
-  --config OPENAI_BASE_URL=<maas-endpoint>/v1
+  --config OPENAI_BASE_URL=<endpoint>/v1
 
-openshell inference set --provider maas --model <model-name>
+openshell inference set --provider my-provider --model <model-name>
 ```
 
 Verify inference works:
@@ -106,114 +129,160 @@ print(r.choices[0].message.content)
 "
 ```
 
-## 3. Find the MLflow Tracking Endpoint
+## 4. Expose MLflow via a Reencrypt Route
 
-Locate the MLflow service or route on your RHOAI cluster:
+The MLflow service on RHOAI uses TLS internally (port 8443 with a service-serving certificate). Sandboxes access it through the OpenShell proxy, which terminates outbound TLS — this requires a **reencrypt** route so the OpenShift router re-encrypts traffic to the backend service.
 
-```bash
-# Check for an internal service
-oc get svc -n redhat-ods-applications | grep mlflow
-
-# Check for an external route
-oc get route -n redhat-ods-applications | grep mlflow
-```
-
-The tracking URI will be one of:
-
-| Access Method | Example URI |
-|--------------|-------------|
-| **Internal service** | `https://mlflow.redhat-ods-applications.svc:8443` |
-| **OpenShift route** | `https://mlflow-redhat-ods-applications.apps.<cluster-domain>` |
-
-Export it for use in later steps:
+Get the service-signing CA certificate:
 
 ```bash
-export MLFLOW_TRACKING_URI=<uri-from-above>
+oc get configmap -n openshift-service-ca signing-cabundle \
+  -o jsonpath='{.data.ca-bundle\.crt}' > /tmp/mlflow-ca.crt
 ```
 
-## 4. Create the Sandbox with MLflow Environment Variables
+Create the reencrypt route:
 
-Pass `MLFLOW_TRACKING_URI` into the sandbox using `--env`:
+```bash
+oc -n redhat-ods-applications create route reencrypt mlflow \
+  --service=mlflow \
+  --port=8443 \
+  --dest-ca-cert=/tmp/mlflow-ca.crt \
+  --insecure-policy=Redirect
+```
+
+Note the route hostname:
+
+```bash
+export MLFLOW_ROUTE=$(oc -n redhat-ods-applications get route mlflow -o jsonpath='{.spec.host}')
+echo "https://$MLFLOW_ROUTE"
+```
+
+Verify the route works:
+
+```bash
+curl -sk -H "Authorization: Bearer $(oc whoami -t)" \
+  -H "X-MLflow-Workspace: default" \
+  "https://$MLFLOW_ROUTE/api/2.0/mlflow/experiments/search?max_results=10"
+```
+
+> **Why reencrypt?** A passthrough route preserves the service's self-signed TLS certificate, which the OpenShell proxy cannot validate during its CONNECT tunnel. An edge route strips TLS but cannot re-encrypt to the backend's 8443 port. Reencrypt handles both sides: the router presents a trusted certificate to clients and re-encrypts to the backend using the service CA.
+
+## 5. Create the Sandbox with MLflow Environment Variables
+
+Pass `MLFLOW_TRACKING_URI` and authentication credentials into the sandbox using `--env`:
 
 ```bash
 openshell sandbox create \
-  --env MLFLOW_TRACKING_URI=$MLFLOW_TRACKING_URI \
+  --name mlflow-demo \
+  --env MLFLOW_TRACKING_URI=https://$MLFLOW_ROUTE \
+  --env MLFLOW_TRACKING_TOKEN=$(oc whoami -t) \
   --env MLFLOW_EXPERIMENT_NAME=openshell-tracing-demo \
-  --policy sandbox-policy.yaml \
-  --upload agent.py:/sandbox/agent.py \
-  --upload pyproject.toml:/sandbox/pyproject.toml \
-  -- bash
+  --env MLFLOW_TRACKING_INSECURE_TLS=true \
+  --env MLFLOW_WORKSPACE=default \
+  --upload agent.py:/sandbox/agent.py
 ```
 
 > **Why `--env` and not `--credential`?**
 >
 > OpenShell's `--credential` flag injects opaque placeholder tokens that are resolved only in HTTP request headers, query parameters, and URL paths by the proxy. The MLflow Python SDK reads `MLFLOW_TRACKING_URI` to make direct TCP connections to the tracking server — it needs the real URL value, not a proxy placeholder. Use `--env` for any environment variable that the application reads directly.
 
-## 5. Configure Sandbox Network Policy
+## 6. Add MLflow Network Policy
 
-The sandbox needs explicit network access to reach the MLflow tracking server. The included `sandbox-policy.yaml` allows:
-
-- **PyPI** — for installing Python dependencies inside the sandbox
-- **MLflow tracking server** — for sending traces
-
-Edit `sandbox-policy.yaml` to match your cluster's MLflow endpoint:
-
-```yaml
-network_policies:
-  mlflow:
-    name: MLflow Tracking Server
-    endpoints:
-      - host: mlflow.redhat-ods-applications.svc    # adjust to your endpoint
-        port: 8443
-    binaries:
-      - path: /usr/bin/python3.13
-```
-
-If using the OpenShift route instead of the internal service, change the host and port accordingly.
-
-> **Note:** `inference.local` traffic is handled automatically by the OpenShell proxy and does not need a network policy entry.
-
-## 6. Run the Agent
-
-Inside the sandbox:
+Sandbox egress is denied by default. Add the MLflow route to the sandbox's network policy:
 
 ```bash
-# Install dependencies
-pip install openai "mlflow>=3.11.1"
+openshell policy update mlflow-demo \
+  --add-endpoint $MLFLOW_ROUTE:443 \
+  --binary /sandbox/.uv/python/cpython-3.14.3-linux-x86_64-gnu/bin/python3.14 \
+  --wait
+```
 
-# Run the agent
-python3 /sandbox/agent.py
+> **Note:** `inference.local` traffic is handled automatically by the OpenShell proxy and does not need a network policy entry. PyPI access for `uv pip install` is allowed by default.
+
+## 7. Run the Agent
+
+Install dependencies inside the sandbox:
+
+```bash
+openshell sandbox exec --name mlflow-demo -- \
+  uv pip install openai "mlflow>=3.11.1"
+```
+
+### Option A: One-shot run
+
+```bash
+openshell sandbox exec --name mlflow-demo -- python3 /sandbox/agent.py
+```
+
+### Option B: Interactive sandbox shell
+
+Launch the OpenShell terminal UI and connect to the sandbox interactively:
+
+```bash
+openshell term
+```
+
+Then inside the sandbox shell:
+
+```
+sandbox@mlflow-demo:~$ ls
+agent.py  lost+found
+sandbox@mlflow-demo:~$ python3 /sandbox/agent.py
+```
+
+### Expected output
+
+```
+[...] MLflow tracing enabled — https://mlflow-...com (experiment: openshell-tracing-demo, workspace: default)
+[...] Sending chat completion request via inference.local ...
+[...] HTTP Request: POST https://inference.local/v1/chat/completions "HTTP/1.1 200 OK"
+
+--- Agent Response ---
+Container sandboxes enhance AI agent security by isolating the agent's
+execution environment from the host system, preventing unauthorized access
+to sensitive data or system resources. ...
+
+Model: qwen3-14b
+Tokens: 36 prompt, 344 completion
+[...] Trace sent to MLflow. Check the experiment UI to verify.
+```
+
+## 8. Verify Traces in MLflow
+
+### Via the MLflow UI
+
+1. Open the MLflow route in your browser (`https://$MLFLOW_ROUTE`)
+2. Select the **default** workspace from the dropdown (top-left)
+3. Click **Experiments** in the left sidebar, then select **openshell-tracing-demo**
+4. Click **Traces** under Observability to see individual traces with request/response pairs, token counts, and execution times
+
+### Programmatically
+
+Run the verification script from outside the sandbox (from the `mlflow-openshell-tracing/` directory):
+
+```bash
+export MLFLOW_TRACKING_URI=https://$(oc -n redhat-ods-applications get route mlflow -o jsonpath='{.spec.host}')
+export MLFLOW_TRACKING_TOKEN=$(oc whoami -t)
+export MLFLOW_TRACKING_INSECURE_TLS=true
+
+uv run verify-traces.py --experiment openshell-tracing-demo --workspace default
 ```
 
 Expected output:
 
 ```
-[...] MLflow tracing enabled — https://mlflow...svc:8443 (experiment: openshell-tracing-demo)
-[...] Sending chat completion request via inference.local ...
+Experiment: openshell-tracing-demo (ID: 2)
 
---- Agent Response ---
-Container sandboxes improve AI agent security by ...
+Found 3 trace(s):
 
-Model: <model-name>
-Tokens: 42 prompt, 128 completion
-[...] Trace sent to MLflow. Check the experiment UI to verify.
-```
+  Request ID     : tr-12fd15fd068d71414c1b75a4800009c5
+  Status         : OK
+  Timestamp      : 1784639093629
+  Duration       : 9704ms
 
-## 7. Verify Traces in MLflow
+  ...
 
-### Via the MLflow UI
-
-1. Open the MLflow UI on RHOAI (navigate to the MLflow route in your browser or through the RHOAI dashboard)
-2. Select the **openshell-tracing-demo** experiment
-3. Confirm that traces appear with request/response data from the agent run
-
-### Programmatically
-
-Run the verification script from outside the sandbox (anywhere with access to the MLflow endpoint):
-
-```bash
-export MLFLOW_TRACKING_URI=<your-mlflow-uri>
-python verify-traces.py --experiment openshell-tracing-demo
+Traces verified successfully.
 ```
 
 ## Troubleshooting
@@ -221,19 +290,23 @@ python verify-traces.py --experiment openshell-tracing-demo
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `MLFLOW_TRACKING_URI` empty inside sandbox | Variable not passed | Use `--env MLFLOW_TRACKING_URI=...` on `openshell sandbox create` |
-| `ConnectionRefusedError` to MLflow | Network policy missing | Add MLflow host/port to `sandbox-policy.yaml` |
-| TLS certificate errors | Self-signed cert on internal service | Set `MLFLOW_TRACKING_INSECURE_TLS=true` via `--env`, or use the route instead |
-| Traces not appearing | Async logging delay | Wait 10-15 seconds after the script exits, then refresh the MLflow UI |
+| `403 Forbidden` / `ProxyError` to MLflow | Network policy missing | Run `openshell policy update <sandbox> --add-endpoint <mlflow-route>:443 --wait` |
+| `502 Bad Gateway` on MLflow route | Wrong route type | Use a **reencrypt** route, not edge or passthrough (MLflow uses TLS internally) |
+| `ConnectionResetError` to MLflow | Passthrough route + proxy conflict | Switch to reencrypt route with `--dest-ca-cert` |
+| `Workspace context is required` | Missing workspace header | Set `MLFLOW_WORKSPACE=default` env var (agent.py injects the header automatically) |
+| `UNAUTHENTICATED` from MLflow | Missing bearer token | Pass `--env MLFLOW_TRACKING_TOKEN=$(oc whoami -t)` |
 | `inference.local` connection refused | Inference not configured | Run `openshell inference set --provider <name> --model <model>` |
-| `ModuleNotFoundError: mlflow` | Dependencies not installed | Run `pip install mlflow>=3.11.1` inside the sandbox |
+| `ModuleNotFoundError: mlflow` | Dependencies not installed | Run `uv pip install mlflow>=3.11.1` inside the sandbox |
 
 ## Environment Variables Reference
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `MLFLOW_TRACKING_URI` | Yes | MLflow tracking server URL (service or route) |
+| `MLFLOW_TRACKING_URI` | Yes | MLflow reencrypt route URL |
+| `MLFLOW_TRACKING_TOKEN` | Yes | OpenShift bearer token (`oc whoami -t`) for MLflow authentication |
 | `MLFLOW_EXPERIMENT_NAME` | No | Experiment name (default: `openshell-tracing-demo`) |
-| `MLFLOW_TRACKING_INSECURE_TLS` | No | Set to `true` to skip TLS verification for self-signed certs |
+| `MLFLOW_TRACKING_INSECURE_TLS` | No | Set to `true` to skip TLS verification |
+| `MLFLOW_WORKSPACE` | No | MLflow workspace / K8s namespace (default: `default`) |
 
 ## Files
 
@@ -241,5 +314,5 @@ python verify-traces.py --experiment openshell-tracing-demo
 |------|---------|
 | `agent.py` | Demo agent — MLflow-traced inference via `inference.local` |
 | `pyproject.toml` | Python dependencies (openai, mlflow) |
-| `sandbox-policy.yaml` | Network policy allowing PyPI + MLflow access |
+| `sandbox-policy.yaml` | Reference network policy (prefer `openshell policy update` for live sandboxes) |
 | `verify-traces.py` | Post-run trace verification script |
