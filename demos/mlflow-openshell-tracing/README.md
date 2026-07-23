@@ -59,7 +59,7 @@ OpenShell requires the [Agent Sandbox](https://agent-sandbox.sigs.k8s.io) Kubern
 
 ```bash
 # Run locally — applies upstream SIG manifests to the cluster
-kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/latest/download/sandbox.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v0.5.2/sandbox.yaml
 ```
 
 Confirm that the controller is running:
@@ -110,6 +110,7 @@ Set up local port-forwarding and register the gateway:
 ```bash
 # Run locally
 oc -n openshell port-forward svc/openshell 8080:8080 &
+PORT_FORWARD_PID=$!
 openshell gateway add http://127.0.0.1:8080 --local --name openshift
 ```
 
@@ -237,6 +238,8 @@ openshell sandbox create \
   --upload agent.py:/sandbox/agent.py
 ```
 
+> **Note:** `MLFLOW_TRACKING_INSECURE_TLS=true` disables TLS certificate validation (CWE-295). This is acceptable for a demo where the route certificate is signed by the cluster's ingress CA, which is not in the system trust store. In production, use `MLFLOW_TRACKING_SERVER_CERT_PATH` with the ingress CA bundle instead.
+
 Verify that the sandbox is running:
 
 ```bash
@@ -346,16 +349,14 @@ uv run verify-traces.py --experiment openshell-tracing-demo --workspace default
 Expected output:
 
 ```
-Experiment: openshell-tracing-demo (ID: 2)
+Experiment: openshell-tracing-demo (ID: 1)
 
-Found 3 trace(s):
+Found 1 trace(s):
 
   Request ID     : tr-12fd15fd068d71414c1b75a4800009c5
   Status         : OK
   Timestamp      : 1784639093629
   Duration       : 9704ms
-
-  ...
 
 Traces verified successfully.
 ```
@@ -381,10 +382,10 @@ oc adm policy remove-scc-from-user privileged -z openshell-sandbox -n openshell
 oc delete ns openshell
 
 # Remove the Agent Sandbox CRDs
-kubectl delete -f https://github.com/kubernetes-sigs/agent-sandbox/releases/latest/download/sandbox.yaml
+kubectl delete -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v0.5.2/sandbox.yaml
 
 # Stop the background port-forward
-kill %1 2>/dev/null
+kill "$PORT_FORWARD_PID" 2>/dev/null || true
 ```
 
 ## Troubleshooting
