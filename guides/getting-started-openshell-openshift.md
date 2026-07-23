@@ -19,8 +19,16 @@ Unless noted otherwise, run all commands on your local machine.
 curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh | OPENSHELL_VERSION=v0.0.85 sh
 ```
 
-- The Red Hat build of Agent Sandbox v0.9.0, installed on the cluster via the Software Catalog.
+- The Red Hat build of Agent Sandbox v0.9.0, installed on the cluster via the Software Catalog. Verify with:
+
+```shell
+oc get csv -n openshift-operators | grep agent-sandbox
+```
+
+  The output should show `agent-sandbox-operator.v0.9.0` with status `Succeeded`.
+
 - Credentials for an LLM provider. This guide uses an Anthropic Claude model served through Google Vertex AI as the example, but any provider works just as well. Check the [Supported Provider Types](https://docs.nvidia.com/openshell/latest/sandboxes/manage-providers#supported-provider-types) table to use something else (Anthropic direct, OpenAI, NVIDIA API Catalog, AWS Bedrock, and more are all supported).
+- The Google Cloud CLI (`gcloud`) installed and authenticated with Application Default Credentials (`gcloud auth application-default login`). Only required when using the Vertex AI example provider.
 
 
 
@@ -32,6 +40,8 @@ Pre-create the namespace so the Security Context Constraint (SCC) binding can be
 oc create ns openshell
 oc adm policy add-scc-to-user privileged -z openshell-sandbox -n openshell
 ```
+
+This grants elevated privileges required by the sandbox supervisor. See [Known Limitations](#known-limitations) for details on the security implications.
 
 
 
@@ -63,7 +73,11 @@ helm install openshell oci://ghcr.io/nvidia/openshell/helm-chart \
 
 The `pkiInitJob.serverDnsNames` value adds the Route hostname to the TLS certificate's Subject Alternative Names (SANs). Without it, the CLI rejects the connection because the certificate isn't valid for the external hostname.
 
+```shell
+oc get pods -n openshell
+```
 
+Verify the gateway pod is `Running` before continuing. If it is stuck in `CreateContainerConfigError` or `Pending`, the SCC binding in Namespace Setup may not have applied correctly.
 
 ## Expose the Gateway
 
@@ -96,6 +110,7 @@ The `--name` value determines the directory name under `~/.config/openshell/gate
 The OpenShell Helm chart auto-generates an mTLS certificate bundle during installation. The commands below extract that bundle from the cluster so the `openshell` CLI on your local machine can establish a trusted TLS connection to the gateway over the Route.
 
 ```shell
+umask 077
 mkdir -p ~/.config/openshell/gateways/openshift/mtls
 
 oc -n openshell get secret openshell-client-tls \
@@ -106,6 +121,9 @@ oc -n openshell get secret openshell-client-tls \
 
 oc -n openshell get secret openshell-client-tls \
   -o jsonpath='{.data.tls\.key}' | base64 -d > ~/.config/openshell/gateways/openshift/mtls/tls.key
+
+chmod 700 ~/.config/openshell/gateways/openshift/mtls
+chmod 600 ~/.config/openshell/gateways/openshift/mtls/tls.key
 ```
 
 ### Status Check
@@ -127,9 +145,9 @@ Server Status
 
 `Connected` means the `openshell` CLI completed a full mTLS handshake with the gateway running in your cluster. Everything from here on talks to that gateway, not to Kubernetes directly.
 
-## Provider Creation
+## Configure Inference
 
-Register the LLM provider credentials with the gateway so sandboxes can use them for inference. This guide uses Google Vertex AI with Application Default Credentials as the example:
+Register the LLM provider credentials with the gateway, enable the v2 provider pipeline, and configure which model the `inference.local` endpoint routes to inside sandboxes. This guide uses Google Vertex AI with Application Default Credentials as the example:
 
 ```shell
 openshell provider create \
@@ -138,21 +156,15 @@ openshell provider create \
   --from-gcloud-adc \
   --config VERTEX_AI_PROJECT_ID=<gcp-project-id> \
   --config VERTEX_AI_REGION=<gcp-region>
+
+openshell settings set --global --key providers_v2_enabled --value true --yes
+
+openshell inference set --provider <provider-name> --model <model-name>
 ```
 
 The gateway now holds these credentials on your behalf. Sandboxes never see them directly; they're injected at the network layer.
 
 Using a different provider? See the [Supported Provider Types](https://docs.nvidia.com/openshell/latest/sandboxes/manage-providers#supported-provider-types) reference for the full list. Anthropic, OpenAI, NVIDIA API Catalog, AWS Bedrock, GitHub Copilot, and others are all supported, each with its own `--type` and credential shape.
-
-## Inference Settings
-
-Enable the v2 provider pipeline so the gateway supports credential injection and inference routing, then configure which model the `inference.local` endpoint routes to inside sandboxes:
-
-```shell
-openshell settings set --global --key providers_v2_enabled --value true --yes
-
-openshell inference set --provider <provider-name> --model <model-name>
-```
 
 
 
@@ -209,15 +221,19 @@ Everything you just did left a trail. The `openshell term` TUI is where you can 
 openshell term
 ```
 
-This opens on the dashboard, listing your gateways and sandboxes. Select `my-sandbox` and press `Enter` to open its detail view, then press `l` to switch to its live logs:
+This opens on the dashboard, listing your gateways and sandboxes. Select `my-sandbox` and press `Enter` to open its detail view, then press `l` to switch to its live logs. Each log entry is an OCSF event showing the verdict (`ALLOWED` or `DENIED`), the binary and destination endpoint, and which policy and engine made the decision. For example:
 
-
+```text
+NET:OPEN [MED] DENIED /usr/local/bin/claude(43) -> github.com:443 [policy:- engine:opa] [reason:endpoint github.com:443 is not allowed by any policy]
+```
 
 After the policy update, the same log view shows the request going through instead:
 
+```text
+NET:OPEN [INFO] ALLOWED /usr/bin/curl(118) -> github.com:443 [policy:my-sandbox engine:opa]
+```
 
-
-Switch over to the policy view to see the rule you added earlier, alongside everything else currently enforced on the sandbox:
+Switch over to the policy view to see the rule you added earlier, alongside everything else currently enforced on the sandbox. Each entry shows the binary, endpoint, access level, and enforcement mode.
 
 
 
@@ -229,6 +245,12 @@ openshell policy get my-sandbox --full
 
 
 
+## Troubleshooting
+
+- **Status shows Disconnected.** Verify the Route exists (`oc get route -n openshell`) and that the TLS bundle directory name matches the `--name` used in `gateway add`.
+- **Certificate validation error.** The `pkiInitJob.serverDnsNames` value may not match the Route hostname. Uninstall and reinstall the Helm chart with the correct value.
+- **Gateway pod not running.** Check that the SCC binding applied before the chart installed (`oc get pods -n openshell`). If needed, delete the pod to trigger a restart.
+
 ## Known Limitations
 
 **Privileged SCC requirement.** The sandbox pod runs with the `privileged` Security Context Constraint. This is needed because the supervisor sets up its own network namespace, nftables rules, and Landlock LSM policies for the agent process — operations that require elevated kernel capabilities. This is a meaningful security exposure; for GA, we plan to replace it with a custom, narrowly scoped permission set. Until then, treat this install path as experimental and do not use it in production.
@@ -239,4 +261,7 @@ You're done. Here's how to clean up when you're finished exploring:
 
 ```shell
 helm uninstall openshell -n openshell
+oc adm policy remove-scc-from-user privileged -z openshell-sandbox -n openshell
+oc delete ns openshell
+rm -rf ~/.config/openshell/gateways/openshift
 ```
