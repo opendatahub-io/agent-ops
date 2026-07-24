@@ -9,28 +9,28 @@ This guide covers the full path: installing Agent Sandbox and OpenShell, configu
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│  OpenShift Cluster                                               │
-│                                                                  │
-│  ┌─────────────────────────────────────────────────────────────┐ │
-│  │  OpenShell Sandbox                                          │ │
-│  │                                                             │ │
-│  │   agent.py                                                  │ │
-│  │     │                                                       │ │
-│  │     ├── OpenAI SDK ──► inference.local ──► LLM Provider     │ │
-│  │     │                   (OpenShell proxy)    (MaaS / vLLM)  │ │
-│  │     │                                                       │ │
-│  │     └── mlflow.openai.autolog()                             │ │
-│  │              │                                              │ │
-│  └──────────────┼──────────────────────────────────────────────┘ │
-│                 │  MLFLOW_TRACKING_URI (via --env)                │
-│                 ▼                                                 │
-│  ┌────────────────────────────┐                                  │
-│  │  MLflow Tracking Server    │◄── reencrypt Route               │
-│  │  (RHOAI managed)           │                                  │
-│  │  redhat-ods-applications   │                                  │
-│  └────────────────────────────┘                                  │
-└──────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│  OpenShift Cluster                                              │
+│                                                                 │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │  OpenShell Sandbox                                        │  │
+│  │                                                           │  │
+│  │   agent.py                                                │  │
+│  │     │                                                     │  │
+│  │     ├── OpenAI SDK ──► inference.local ──► LLM Provider   │  │
+│  │     │                   (OpenShell proxy)   (MaaS / vLLM) │  │
+│  │     │                                                     │  │
+│  │     └── mlflow.openai.autolog()                           │  │
+│  │              │                                            │  │
+│  └──────────────┼────────────────────────────────────────────┘  │
+│                 │  MLFLOW_TRACKING_URI (via --env)               │
+│                 ▼                                                │
+│  ┌────────────────────────────┐                                 │
+│  │  MLflow Tracking Server    │◄── reencrypt Route              │
+│  │  (RHOAI managed)           │                                 │
+│  │  redhat-ods-applications   │                                 │
+│  └────────────────────────────┘                                 │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 **Key integration points:**
@@ -109,7 +109,7 @@ Set up local port-forwarding and register the gateway:
 
 ```bash
 # Run locally
-oc -n openshell port-forward svc/openshell 8080:8080 &
+oc -n openshell port-forward svc/openshell 8080:8080 2>/dev/null &
 PORT_FORWARD_PID=$!
 openshell gateway add http://127.0.0.1:8080 --local --name openshift
 ```
@@ -150,8 +150,8 @@ openshell inference set --provider my-provider --model <model-name>
 Verify that inference works:
 
 ```bash
-# Run locally — creates a temporary sandbox
-openshell sandbox create -- python3 -c "
+# Run locally — creates a temporary sandbox and deletes it after
+openshell sandbox create --no-keep -- uv run --with openai python3 -c "
 from openai import OpenAI
 client = OpenAI(api_key='unused', base_url='https://inference.local/v1')
 r = client.chat.completions.create(model='router', messages=[{'role':'user','content':'hello'}])
@@ -303,13 +303,15 @@ In the terminal UI, select the `mlflow-demo` sandbox from the list and press Ent
 ```
 # Inside the sandbox
 sandbox@mlflow-demo:~$ python3 /sandbox/agent.py
+sandbox@mlflow-demo:~$ exit
 ```
 
-For more detail on navigating the terminal UI, see the [OpenShell quickstart](https://docs.nvidia.com/openshell/latest/get-started/quickstart).
+Type `exit` to leave the sandbox shell and return to your local terminal. For more detail on navigating the terminal UI, see the [OpenShell quickstart](https://docs.nvidia.com/openshell/latest/get-started/quickstart).
 
 ### Expected output
 
 ```
+...
 [...] MLflow tracing enabled — https://mlflow-...com (experiment: openshell-tracing-demo, workspace: default)
 [...] Sending chat completion request via inference.local ...
 [...] HTTP Request: POST https://inference.local/v1/chat/completions "HTTP/1.1 200 OK"
@@ -322,13 +324,16 @@ to sensitive data or system resources. ...
 Model: qwen3-14b
 Tokens: 36 prompt, 344 completion
 [...] Trace sent to MLflow. Check the experiment UI to verify.
+...
 ```
+
+> **Note:** You may see `InsecureRequestWarning` messages about unverified HTTPS requests. These are cosmetic and can be safely ignored.
 
 ## 9. Verify traces in MLflow
 
 ### Via the MLflow UI
 
-1. Open the MLflow route in your browser (`https://$MLFLOW_ROUTE`)
+1. Open the RHOAI dashboard and navigate to **MLflow** — or open the MLflow route directly in your browser (`https://$MLFLOW_ROUTE`). Note that the RHOAI dashboard URL may differ from the API route (e.g., `rh-ai.apps.<cluster>/mlflow`).
 2. Select the **default** workspace from the dropdown (top-left)
 3. Click **Experiments** in the left sidebar, then select **openshell-tracing-demo**
 4. Click **Traces** under Observability to see individual traces with request/response pairs, token counts, and execution times
