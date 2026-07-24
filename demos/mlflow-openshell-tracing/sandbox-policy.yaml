@@ -1,0 +1,48 @@
+version: 1
+
+filesystem_policy:
+  include_workdir: true
+  read_only:
+  - /usr
+  - /lib
+  - /etc
+  - /app
+  - /var/log
+  - /proc/self
+  - /dev/urandom
+  read_write:
+  - /sandbox
+  - /tmp
+  - /dev/null
+
+landlock:
+  compatibility: best_effort
+
+process:
+  run_as_user: sandbox
+  run_as_group: sandbox
+
+network_policies:
+  # Allow pip/uv to install Python packages inside the sandbox.
+  pypi:
+    name: PyPI
+    endpoints:
+      - { host: pypi.org, port: 443 }
+      - { host: files.pythonhosted.org, port: 443 }
+
+  # Allow the MLflow SDK to send traces to the RHOAI MLflow tracking server.
+  # Adjust the host and port to match your cluster's MLflow route or service.
+  #
+  # Option A: OpenShift route (external)
+  # mlflow:
+  #   name: MLflow Tracking Server (route)
+  #   endpoints:
+  #     - host: mlflow-redhat-ods-applications.apps.<cluster-domain>
+  #       port: 443
+  #
+  # Option B: Cluster-internal service
+  mlflow:
+    name: MLflow Tracking Server
+    endpoints:
+      - host: mlflow.redhat-ods-applications.svc
+        port: 8443
