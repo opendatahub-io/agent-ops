@@ -43,8 +43,6 @@ oc adm policy add-scc-to-user privileged -z openshell-sandbox -n openshell
 
 This grants elevated privileges required by the sandbox supervisor. See [Known Limitations](#known-limitations) for details on the security implications.
 
-
-
 ## Route Hostname
 
 Determine the Route hostname from the cluster's apps domain. This variable is needed during installation so the gateway's TLS certificate includes the external hostname:
@@ -61,6 +59,12 @@ echo "$ROUTE_HOST"
 
 See the [Helm chart README](https://github.com/NVIDIA/OpenShell/blob/main/deploy/helm/openshell/README.md) for full chart details.
 
+Pick a database backend before installing. OpenShell supports SQLite (the default) and external PostgreSQL. Choose **one** of the two options below.
+
+### Option A: SQLite (default)
+
+SQLite stores data in a file on a per-pod PVC and runs the gateway as a StatefulSet. No external database required:
+
 ```shell
 helm install openshell oci://ghcr.io/nvidia/openshell/helm-chart \
   --version 0.0.85 \
@@ -71,7 +75,46 @@ helm install openshell oci://ghcr.io/nvidia/openshell/helm-chart \
   --set "pkiInitJob.serverDnsNames[0]=${ROUTE_HOST}"
 ```
 
-The `pkiInitJob.serverDnsNames` value adds the Route hostname to the TLS certificate's Subject Alternative Names (SANs). Without it, the CLI rejects the connection because the certificate isn't valid for the external hostname.
+
+
+### Option B: External PostgreSQL
+
+Use external PostgreSQL when you need multi-replica gateways or a database managed outside this chart. The OpenShell chart does not deploy a database; it is recommended to deploy a PostgreSQL instance separately with your own configuration.
+
+To try PostgreSQL quickly for **testing purposes**, apply the following manifest. It creates a Secret with the database credentials and connection URI, a PVC for data persistence, a single-replica PostgreSQL Deployment, and a Service in the `openshell` namespace:
+
+```shell
+oc apply -f https://raw.githubusercontent.com/opendatahub-io/agent-ops/main/common/postgresql.yaml
+```
+
+The manifest creates a `postgresql-credentials` Secret that includes a `uri` key OpenShell can read directly.
+
+If you are connecting to your own PostgreSQL instance, create a Secret with a `uri` key containing your connection string:
+
+```shell
+kubectl create secret generic postgresql-credentials -n openshell \
+  --from-literal=uri="postgresql://user:pass@host:5432/dbname"
+```
+
+Install the chart pointing at the Secret:
+
+```shell
+helm install openshell oci://ghcr.io/nvidia/openshell/helm-chart \
+  --version 0.0.85 \
+  --namespace openshell \
+  --set workload.kind=deployment \
+  --set server.externalDbSecret=postgresql-credentials \
+  --set podSecurityContext.fsGroup=null \
+  --set securityContext.runAsUser=null \
+  --set server.auth.allowUnauthenticatedUsers=true \
+  --set "pkiInitJob.serverDnsNames[0]=${ROUTE_HOST}"
+```
+
+`workload.kind=deployment` lets you run multiple gateway replicas that all connect to the same external database. Option A uses `statefulset` instead because each pod needs its own persistent volume for the SQLite file.
+
+### Verify the Install
+
+For either option, the `pkiInitJob.serverDnsNames` value adds the Route hostname to the TLS certificate's Subject Alternative Names (SANs). Without it, the CLI rejects the connection because the certificate isn't valid for the external hostname.
 
 ```shell
 oc get pods -n openshell
@@ -92,6 +135,8 @@ oc create route passthrough openshell \
   --hostname="${ROUTE_HOST}" \
   -n openshell
 ```
+
+
 
 ## Connect the CLI
 
@@ -125,6 +170,8 @@ oc -n openshell get secret openshell-client-tls \
 chmod 700 ~/.config/openshell/gateways/openshift/mtls
 chmod 600 ~/.config/openshell/gateways/openshift/mtls/tls.key
 ```
+
+
 
 ### Status Check
 
@@ -167,8 +214,6 @@ The gateway now holds these credentials on your behalf. Sandboxes never see them
 Using a different provider? See the [Supported Provider Types](https://docs.nvidia.com/openshell/latest/sandboxes/manage-providers#supported-provider-types) reference for the full list. Anthropic, OpenAI, NVIDIA API Catalog, AWS Bedrock, GitHub Copilot, and others are all supported, each with its own `--type` and credential shape.
 
 To route inference to a model served by RHOAI rather than an external provider, see [Inference Routing with RHOAI via OpenShell](inference-routing-rhoai.md).
-
-
 
 ## Sandbox Creation
 
@@ -237,8 +282,6 @@ NET:OPEN [INFO] ALLOWED /usr/bin/curl(118) -> github.com:443 [policy:my-sandbox 
 
 Switch over to the policy view to see the rule you added earlier, alongside everything else currently enforced on the sandbox. Each entry shows the binary, endpoint, access level, and enforcement mode.
 
-
-
 Alternatively, you can use the `openshell` CLI:
 
 ```shell
@@ -253,9 +296,11 @@ openshell policy get my-sandbox --full
 - **Certificate validation error.** The `pkiInitJob.serverDnsNames` value may not match the Route hostname. Uninstall and reinstall the Helm chart with the correct value.
 - **Gateway pod not running.** Check that the SCC binding applied before the chart installed (`oc get pods -n openshell`). If needed, delete the pod to trigger a restart.
 
+
+
 ## Known Limitations
 
-**Privileged SCC requirement.** The sandbox pod runs with the `privileged` Security Context Constraint. This is needed because the supervisor sets up its own network namespace, nftables rules, and Landlock LSM policies for the agent process — operations that require elevated kernel capabilities. This is a meaningful security exposure; for GA, we plan to replace it with a custom, narrowly scoped permission set. Until then, treat this install path as experimental and do not use it in production.
+**Privileged SCC requirement.** The sandbox pod runs with the `privileged` Security Context Constraint. This is needed because the supervisor sets up its own network namespace, nftables rules, and Landlock LSM policies for the agent process, operations that require elevated kernel capabilities. This is a meaningful security exposure; for GA, we plan to replace it with a custom, narrowly scoped permission set. Until then, treat this install path as experimental and do not use it in production.
 
 ## Uninstallation
 
@@ -267,3 +312,4 @@ oc adm policy remove-scc-from-user privileged -z openshell-sandbox -n openshell
 oc delete ns openshell
 rm -rf ~/.config/openshell/gateways/openshift
 ```
+
