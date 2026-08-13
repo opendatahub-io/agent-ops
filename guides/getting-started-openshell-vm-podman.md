@@ -10,12 +10,13 @@ New to OpenShell? Read [How OpenShell Works](https://docs.nvidia.com/openshell/l
 
 ## Prerequisites
 
-- You are running Fedora or RHEL on your workstation or in a VM (Silverblue works).
+- You are running Fedora or RHEL on your workstation or in a VM. (Fedora Silverblue and other immutable variants require layering the RPMs with `rpm-ostree install openshell openshell-gateway` instead of a standard package manager.)
 - Podman is installed and your user can run rootless containers (`podman ps` succeeds without `sudo`).
-- The Google Cloud CLI (`gcloud`) is installed and authenticated with Application Default Credentials. If you have already set up Claude Code using the RH internal guide, these are already configured. To verify:
+- The Google Cloud CLI (`gcloud`) is installed and you have **user** Application Default Credentials configured with `gcloud auth application-default login`. If you have already set up Claude Code using the RH internal guide, these are already in place. To verify:
   ```bash
-  gcloud auth application-default print-access-token
+  gcloud auth application-default print-access-token > /dev/null && echo "ADC credentials OK"
   ```
+  > The check discards the token output intentionally — do not print or share the token value.
 - You know your team's GCP project ID. You can find it by running `gcloud config get-value project`, or by checking the [internal project spreadsheet](https://docs.google.com/spreadsheets/d/1qWoCx3i5jZ-t6BUD-2AIdutk9sMmkytoXqjBXh2oi4U/edit?gid=0#gid=0) under the column matching your upline manager.
 
 ## 1. Install OpenShell
@@ -32,7 +33,11 @@ On Fedora and RHEL, this installs the `openshell` and `openshell-gateway` RPMs a
 systemctl --user start openshell-gateway
 ```
 
-The service generates TLS certificates and configures the CLI automatically on first start. It is enabled by default, so it starts automatically on future logins.
+The service generates TLS certificates and configures the CLI automatically on first start. It is enabled by default, so it starts automatically on future logins. If you need sandboxes to remain available after logout (common in a long-running VM), enable user lingering:
+
+```bash
+sudo loginctl enable-linger "$USER"
+```
 
 Verify the CLI is connected:
 
@@ -43,6 +48,14 @@ openshell status
 You should see `Status: Connected` and `Authentication: Authenticated (mTLS transport)`.
 
 ## 3. Create the Vertex AI provider
+
+**Prerequisites:** The `aiplatform.googleapis.com` API must be enabled on your GCP project and your account must have the **Vertex AI User** role (or equivalent). Verify API access with:
+
+```bash
+gcloud services list --enabled --project GCP_PROJECT_ID --filter="name:aiplatform.googleapis.com"
+```
+
+If the command returns no output, contact your GCP project admin to enable the API.
 
 Replace `GCP_PROJECT_ID` with your team's project ID.
 
@@ -113,7 +126,13 @@ openshell sandbox list   # find your sandbox name
 openshell term <sandbox-name>
 ```
 
-Review each endpoint request before approving. For common Vertex AI endpoints and guidance on whether to approve them, see the [Google Vertex AI provider documentation](https://docs.nvidia.com/openshell/latest/providers/google-vertex-ai#policy-proposals).
+Review each endpoint request carefully before approving:
+
+- **Approve** only the specific Vertex AI endpoints required for the model you configured. With `providers_v2_enabled`, most Vertex AI endpoints are pre-approved automatically — you should rarely see policy requests for them.
+- **Reject** any endpoint you do not recognise or that the agent cannot explain. An agent requesting access to unexpected hosts may indicate a prompt injection or misconfiguration.
+- The gateway always blocks access to `metadata.google.internal` from inside the sandbox. This protection cannot be overridden; do not attempt to approve it.
+
+For a reference list of expected Vertex AI endpoints, see the [Google Vertex AI provider documentation](https://docs.nvidia.com/openshell/latest/providers/google-vertex-ai#policy-proposals).
 
 ## Next steps
 
