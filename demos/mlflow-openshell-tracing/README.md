@@ -94,7 +94,15 @@ helm install openshell oci://ghcr.io/nvidia/openshell/helm-chart \
   --set server.disableTls=true \
   --set podSecurityContext.fsGroup=null \
   --set securityContext.runAsUser=null \
-  --set server.auth.allowUnauthenticatedUsers=true
+  --set server.auth.allowUnauthenticatedUsers=true \
+  --set server.telemetryEnabled=false
+```
+
+Disable anonymous telemetry collection from the gateway and sandbox supervisors. This step is required for OpenShell < 0.0.103 because the Helm chart does not wire `server.telemetryEnabled` into the pod environment until [v0.0.103](https://github.com/NVIDIA/OpenShell/pull/2648):
+
+```bash
+# Run locally
+oc set env statefulset/openshell OPENSHELL_TELEMETRY_ENABLED=false -n openshell
 ```
 
 Wait for the gateway to be ready:
