@@ -1,0 +1,13 @@
+# A minimal agent image for OpenShell sandboxes.
+#
+# The image needs a shell and the agent's binaries under /usr. It does not need any OpenShell
+# component: the Kubernetes driver injects the sandbox runtime with an init container. It does
+# not need iproute2, nftables or nsenter, and it does not need to create /sandbox.
+FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+
+RUN microdnf install -y python3.12 && microdnf clean all
+
+# Until the gateway runs an OpenShell build with NVIDIA/OpenShell#4150 (after v0.1.2-rhaiv.5),
+# Python HTTPS needs this shim on RHCOS 9 kernels. Remove it once you run a build with the fix.
+COPY sitecustomize.py /usr/lib/python3.12/site-packages/sitecustomize.py
+COPY agent.py /usr/local/bin/agent.py

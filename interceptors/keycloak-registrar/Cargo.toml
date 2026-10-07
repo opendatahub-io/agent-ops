@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[workspace]
+
+[package]
+name = "keycloak-registrar-interceptor"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.94"
+license = "Apache-2.0"
+
+[dependencies]
+jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
+openshell-core = { git = "https://github.com/NVIDIA/OpenShell", rev = "8719fc9f37a93dd96435cf6753ae53c8ee8809e6", default-features = false }
+openshell-extension-core = { git = "https://github.com/NVIDIA/OpenShell", rev = "8719fc9f37a93dd96435cf6753ae53c8ee8809e6" }
+prost-types = "0.14"
+regex = "1"
+reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls-native-roots-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1.43", features = ["macros", "rt-multi-thread", "signal"] }
+tonic = { version = "0.14", features = ["transport", "tls-aws-lc"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+axum = "0.8"
+ed25519-dalek = { version = "2", features = ["pkcs8", "pem", "rand_core"] }
+rand = "0.8"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "keycloak-registrar-interceptor"
+path = "src/main.rs"

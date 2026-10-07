@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Append to the gateway's gateway.toml. The Helm chart has no interceptor
+# values yet, so add this to the rendered ConfigMap and mount the service CA at
+# tls_ca_cert_path. Start the interceptor before the gateway.
+
+[[openshell.gateway.interceptors]]
+name             = "keycloak-registrar"
+grpc_endpoint    = "https://keycloak-registrar.openshell.svc:8443"
+tls_ca_cert_path = "/etc/openshell-service-ca/service-ca.crt"
+order            = 100
+failure_policy   = "fail_open"
+binding_policy   = "exact"
+timeout          = "5s"
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/CreateSandbox"
+phases = ["post_commit"]
+
+[[openshell.gateway.interceptors.bindings]]
+rpc    = "openshell.v1.OpenShell/DeleteSandbox"
+phases = ["post_commit"]

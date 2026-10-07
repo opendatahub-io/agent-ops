@@ -1,5 +1,11 @@
 # MLflow tracing from OpenShell sandboxes on RHOAI
 
+> [!NOTE]
+> This guide was written for OpenShell 0.0.116 and has not been re-validated with
+> the build used by the install guide (`main` at `8719fc9`). Chart 0.1.x
+> renamed the image values (`gateway.image.*`, `supervisor.image.*`,
+> `sandboxRuntime.image.*`) and no longer needs a privileged SCC.
+
 > **Warning:** OpenShell on OpenShift is experimental. This install path requires a privileged Security Context Constraint (SCC) and runs with TLS disabled on the gateway. Do not use it in production.
 
 Capture MLflow traces from AI agents running in [OpenShell](https://docs.nvidia.com/openshell/latest) sandboxes. Traces are stored in the MLflow instance managed by Red Hat OpenShift AI (RHOAI), so no separate tracking server is required.

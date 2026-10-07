@@ -1,5 +1,11 @@
 # OpenShell v0.0.85 on OpenShift - SCC-Requirements
 
+> [!NOTE]
+> Historical. These results apply to OpenShell v0.0.85. Since 0.1.0, OpenShell is
+> capability-free: the gateway, supervisor, and sandbox pods run under the default
+> `restricted-v2` SCC with no added capabilities (validated with `main` at `8719fc9`
+> on OpenShift 4.20.27).
+
 ## Versions Tested
 - OpenShell: v0.0.85
 - Agent Sandbox: Red Hat build v0.9.0

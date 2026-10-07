@@ -1,22 +1,32 @@
-# Get started with OpenShell on OpenShift
+# Install OpenShell on OpenShift
 
 > **Midstream Documentation**
 >
 > The OpenShift install path should be treated as experimental and not used in production.
 
-A walkthrough for installing OpenShell on an OpenShift cluster, exposing the gateway through a `Route`, and running your first sandboxed agent session with network policies controlling what it can reach. By the end you will have a sandboxed agent running against your LLM provider, with an egress policy you control. The guide takes around 15 minutes.
+> [!IMPORTANT]
+> This guide installs the Red Hat product-built OpenShell images
+> (`quay.io/opendatahub/odh-openshell-*:v0.1.2-rhaiv.5`). See
+> [Images used in this repository](../README.md#images-used-in-this-repository).
+
+
+Install OpenShell on an OpenShift cluster, expose the gateway through a `Route`, connect the `openshell` CLI, and run a first sandbox. It takes around 15 minutes. This is step 1 of the setup track; the [README](../README.md#set-up-openshell-with-openshift-ai) lists the next steps, and the [demos](../demos/) show what to do with it.
 
 New to OpenShell? Read [How OpenShell Works](https://docs.nvidia.com/openshell/latest/about/how-it-works) first for a quick tour of the architecture: the CLI, the gateway, and the supervisor.
+
+This guide sets up the pieces marked ① below. The later steps add the rest.
+
+![What agent-ops sets up for OpenShell with OpenShift AI](images/setup-architecture.png)
 
 Unless noted otherwise, run all commands on your local machine.
 
 ## Prerequisites
 
-- You have access to a test OpenShift cluster running version 4.21 or later.
+- You have access to a test OpenShift cluster running 4.19.35, 4.20.26, 4.21.21, 4.22.2, or later in the same minor stream (the minimum versions for the Red Hat build of Agent Sandbox). Validated versions and the full list of requirements are in the [README](../README.md#requirements); run `./scripts/preflight.sh` to check them.
 - You have cluster administrator permissions.
 - You have installed the OpenShift CLI (`oc`) locally.
 - You have Helm installed locally.
-- The Red Hat build of Agent Sandbox v0.9.0 is installed on the cluster in the `openshift-operators` namespace via the Software Catalog.
+- The Red Hat build of Agent Sandbox v0.9.0 (channel `preview-0.9`, Technology Preview) is installed on the cluster from the Software Catalog. See [Deploying Red Hat build of Agent Sandbox](https://docs.redhat.com/en/documentation/openshift_sandboxed_containers/1.12/html/deploying_red_hat_build_of_agent_sandbox/index).
 - You have obtained credentials for a supported inference provider. This guide uses an Anthropic Claude model served through Google Vertex AI as the example. OpenShell also supports other provider types; configuration requirements differ by provider. Check the [Supported Provider Types](https://docs.nvidia.com/openshell/latest/sandboxes/manage-providers#supported-provider-types) table for details.
 - The Google Cloud CLI (`gcloud`) is installed and authenticated with Application Default Credentials (`gcloud auth application-default login`). Only required when using the Vertex AI example provider.
 
@@ -33,9 +43,15 @@ Unless noted otherwise, run all commands on your local machine.
 
 ## Install the OpenShell CLI
 
-From a checked-out copy of this repository, run the installer wrapper. The
-wrapper downloads `install.sh` from the immutable upstream commit for OpenShell
-v0.0.116 and verifies its pinned SHA-256 checksum before execution:
+This guide uses the OpenShell build validated on OpenShift: the Red Hat build
+`v0.1.2-rhaiv.5`, made from upstream `main` at commit `e7fdd6b`. There is no
+tagged CLI release for it. From a checked-out copy of this repository, run the
+installer wrapper. It downloads `install.sh` from commit `8719fc9`, verifies its
+pinned SHA-256 checksum, and installs the rolling `dev` CLI build. The CLI used
+for validation was built from source at `8719fc9`
+(`cargo build --release -p openshell-cli`) and works with the `v0.1.2-rhaiv.5`
+gateway. A Linux CLI binary from the same Red Hat build is in
+`quay.io/opendatahub/odh-openshell-cli:v0.1.2-rhaiv.5`.
 
 ```shell
 ./scripts/install-openshell-cli.sh
@@ -43,15 +59,15 @@ v0.0.116 and verifies its pinned SHA-256 checksum before execution:
 
 ## Create the OpenShell namespace
 
-Create the namespace before installing the OpenShell Helm chart so the Security Context Constraint (SCC) binding can be applied before the chart installs:
-
-> [!WARNING]
-> This procedure grants the **privileged** Security Context Constraint to the `openshell-sandbox` service account. Sandboxes can then run with elevated kernel capabilities. Use this installation path only in an isolated test cluster. Do not use it in production.
+Create the namespace before installing the OpenShell Helm chart:
 
 ```shell
 oc create ns openshell
-oc adm policy add-scc-to-user privileged -z openshell-sandbox -n openshell
 ```
+
+No Security Context Constraint (SCC) grant is needed. Since OpenShell 0.1.0, the
+gateway, supervisor, and sandbox pods run under the default `restricted-v2` SCC
+with a non-root UID from the namespace range and no added Linux capabilities.
 
 ## Determine the route hostname
 
@@ -69,16 +85,23 @@ echo "$ROUTE_HOST"
 
 See the [OpenShell Helm chart README.md file](https://github.com/NVIDIA/OpenShell/blob/main/deploy/helm/openshell/README.md) for full chart details.
 
-Set the tag shared by the Red Hat gateway and supervisor images:
+Set the image tag and the chart version. Red Hat builds are tagged
+`v<upstream version>-rhaiv.<build>`; use the upstream development chart for the
+commit the build was made from (`e7fdd6b` for `v0.1.2-rhaiv.5`):
 
 ```shell
-ODH_IMAGE_TAG=v0.0.116-rhaiv.0
+OPENSHELL_IMAGE_TAG=v0.1.2-rhaiv.5
+OPENSHELL_CHART_VERSION=0.0.0-dev.e7fdd6beef98f7f92d86271a169fdd4d3be44cf3
 ```
+
+The `--set ...image...` flags in the install commands below replace the chart's
+default upstream images (`ghcr.io/nvidia/openshell/*`) with the Red Hat builds
+from `quay.io/opendatahub`.
 
 Choose a database backend before installing. OpenShell supports SQLite (the default) and external PostgreSQL. Choose **one** of the two options below.
 
 > [!WARNING]
-> Both examples below set `allowUnauthenticatedUsers=true`. This bypasses user authentication and treats every API request as a trusted local developer. It is a convenience shortcut for single-user test clusters and should not be used on shared clusters.
+> Both examples below set `allowUnauthenticatedUsers=true`. This bypasses user authentication and treats every API request as a trusted local developer. It is a convenience shortcut for single-user test clusters and should not be used on shared clusters. To turn on real logins (Keycloak, roles, workspace access by group, the dashboard behind a login), follow [User authentication](02-user-auth.md) after this guide (`make user-auth`).
 
 ### Option A: SQLite (default)
 
@@ -89,16 +112,17 @@ SQLite stores data in a file on a per-pod `PVC` and runs the gateway as a `State
 
 ```shell
 helm install openshell oci://ghcr.io/nvidia/openshell/helm-chart \
-  --version 0.0.116 \
+  --version "${OPENSHELL_CHART_VERSION}" \
   --namespace openshell \
-  --set image.repository=quay.io/opendatahub/odh-openshell-gateway \
-  --set image.tag="${ODH_IMAGE_TAG}" \
-  --set supervisor.image.repository=quay.io/opendatahub/odh-openshell-supervisor \
-  --set supervisor.image.tag="${ODH_IMAGE_TAG}" \
   --set podSecurityContext.fsGroup=null \
   --set securityContext.runAsUser=null \
   --set server.auth.allowUnauthenticatedUsers=true \
-  --set "pkiInitJob.serverDnsNames[0]=${ROUTE_HOST}"
+  --set "pkiInitJob.serverDnsNames[0]=${ROUTE_HOST}" \
+  --set global.image.registry=quay.io/opendatahub \
+  --set global.image.tag="${OPENSHELL_IMAGE_TAG}" \
+  --set gateway.image.repository=odh-openshell-gateway \
+  --set supervisor.image.repository=odh-openshell-supervisor \
+  --set sandboxRuntime.image.repository=odh-openshell-sandbox
 ```
 
 
@@ -125,18 +149,19 @@ Install the OpenShell Helm chart pointing at the `Secret`:
 
 ```shell
 helm install openshell oci://ghcr.io/nvidia/openshell/helm-chart \
-  --version 0.0.116 \
+  --version "${OPENSHELL_CHART_VERSION}" \
   --namespace openshell \
-  --set image.repository=quay.io/opendatahub/odh-openshell-gateway \
-  --set image.tag="${ODH_IMAGE_TAG}" \
-  --set supervisor.image.repository=quay.io/opendatahub/odh-openshell-supervisor \
-  --set supervisor.image.tag="${ODH_IMAGE_TAG}" \
   --set workload.kind=deployment \
   --set server.externalDbSecret=postgresql-credentials \
   --set podSecurityContext.fsGroup=null \
   --set securityContext.runAsUser=null \
   --set server.auth.allowUnauthenticatedUsers=true \
-  --set "pkiInitJob.serverDnsNames[0]=${ROUTE_HOST}"
+  --set "pkiInitJob.serverDnsNames[0]=${ROUTE_HOST}" \
+  --set global.image.registry=quay.io/opendatahub \
+  --set global.image.tag="${OPENSHELL_IMAGE_TAG}" \
+  --set gateway.image.repository=odh-openshell-gateway \
+  --set supervisor.image.repository=odh-openshell-supervisor \
+  --set sandboxRuntime.image.repository=odh-openshell-sandbox
 ```
 
 `workload.kind=deployment` lets you run multiple gateway replicas that all connect to the same external database. Option A uses `statefulset` instead because each pod needs its own persistent volume for the SQLite file.
@@ -149,7 +174,7 @@ For either option, the `pkiInitJob.serverDnsNames` value adds the `Route` hostna
 oc get pods -n openshell
 ```
 
-Verify the gateway pod is `Running` before continuing. If it is stuck in `CreateContainerConfigError` or `Pending`, the SCC binding in Namespace Setup may not have applied correctly.
+Verify the gateway pod is `Running` before continuing. If it is stuck in `Pending`, check that a default storage class exists.
 
 ## Expose the gateway
 
@@ -216,122 +241,64 @@ Server Status
   Gateway: openshift
   Server: https://<ROUTE_HOST>
   Status: Connected
-  Version: 0.0.116-rhaiv.0
+  Version: 0.1.2-rhaiv.5
 ```
 
 `Connected` means the `openshell` CLI completed a full mTLS handshake with the gateway running in your cluster. Everything from here on talks to that gateway, not to Kubernetes directly.
 
-## Configure an inference provider
 
-Register the LLM provider credentials with the gateway, enable the v2 provider pipeline, and configure which model the `inference.local` endpoint routes to inside sandboxes. This guide uses Google Vertex AI with Application Default Credentials as the example:
-
-```shell
-openshell provider create \
-  --name <provider-name> \
-  --type google-vertex-ai \
-  --from-gcloud-adc \
-  --config VERTEX_AI_PROJECT_ID=<gcp-project-id> \
-  --config VERTEX_AI_REGION=<gcp-region>
-
-openshell settings set --global --key providers_v2_enabled --value true --yes
-
-openshell inference set --provider <provider-name> --model <model-name>
-```
-
-The gateway stores the provider credentials and applies them when routing inference requests, rather than exposing the credentials as sandbox environment variables.
-
-Using a different provider? See the [Supported Provider Types](https://docs.nvidia.com/openshell/latest/sandboxes/manage-providers#supported-provider-types) reference for the full list. Anthropic, OpenAI, NVIDIA API Catalog, AWS Bedrock, GitHub Copilot, and others are all supported, each with its own `--type` and credential shape.
-
-To route inference to a model served by RHOAI rather than an external provider, see [Inference Routing with RHOAI via OpenShell](inference-routing-rhoai.md).
-
-## Create a sandbox
+## Run a first sandbox
 
 ```shell
-openshell sandbox create --name my-sandbox
+openshell sandbox create --name hello -- echo "hello from a sandbox"
+openshell sandbox delete hello
 ```
 
-This starts a sandbox pod in the `openshell` namespace. When the sandbox is ready, the command opens an interactive shell in the sandbox. The supervisor configures inference routing, audit logging, policy enforcement, and the associated Open Policy Agent (OPA) policy engine.
+The sandbox runs in the `openshell` namespace with the default policy: no network access out of the sandbox, and only the default filesystem paths. To run your own agent, see [Bring your own agent image](04-agent-images.md); for a guided agent session, see the [Claude Code demo](../demos/claude-code-vertex/).
 
-## Run Claude Code in the sandbox
+## Optional: the OpenShell dashboard
 
-From the shell you just landed in, launch Claude Code:
+The [OpenShell dashboard](https://github.com/Gkrumbach07/openshell-dashboard) is a standalone web UI for workspaces, sandboxes, providers and gateway status. It talks to the gateway with the same mTLS client bundle as the CLI. Dashboard `1.2.0` supports gateways `0.1.0` to `0.1.2` and was validated against `v0.1.2-rhaiv.5`: it reports the gateway as supported, lists workspaces and sandboxes, and creates, inspects and deletes sandboxes.
+
+Deploy it into the gateway's namespace, without a `Route`, and open it through a port-forward:
 
 ```shell
-ANTHROPIC_BASE_URL="https://inference.local" \
-ANTHROPIC_API_KEY=unused \
-CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1 \
-claude --bare
+make dashboard                     # OPENSHELL_NAMESPACE defaults to openshell
+oc -n openshell port-forward svc/openshell-dashboard 8080:8080
 ```
 
-This routes model traffic through the gateway instead of Anthropic directly, so it can inject your real Vertex AI credentials. `--bare` skips login since auth is already handled by the provider. `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` prevents Claude Code from sending beta headers that the OpenShell proxy does not yet pass through. Without it, the proxy rejects requests with unrecognised headers. Configuration differs for other supported agents. For more information, see [Supported Agents](https://docs.nvidia.com/openshell/latest/about/supported-agents).
+Open `http://localhost:8080`.
 
-## Update the egress policy
-
-Ask Claude, or your agent of choice, to curl `https://github.com`. The default policy blocks it:
-
-```text
-Output: The curl command failed with a 403 Forbidden error.
-```
-
-> [!NOTE]
-> You can also run `curl https://github.com` directly in the sandbox shell to verify the policy deterministically.
-
-From your local machine, add a policy to allow access:
-
-```shell
-openshell policy update my-sandbox --add-endpoint github.com:443:read-only:rest:enforce --binary /usr/bin/curl --wait
-```
-
-This allows `/usr/bin/curl` to reach `github.com:443` with read-only REST access (GET, HEAD, OPTIONS). `--wait` blocks until the sandbox confirms the policy is live.
-
-Ask it to curl GitHub again, and this time it succeeds:
-
-```text
-Output: This time it worked! The curl successfully retrieved the GitHub homepage.
-```
-
-
-
-## Inspect events in the OpenShell terminal
-
-OpenShell records sandbox network requests and policy decisions as events. The `openshell term` TUI displays these events in real time:
-
-```shell
-openshell term
-```
-
-This opens on the dashboard, listing your gateways and sandboxes. Select `my-sandbox` and press `Enter` to open its detail view, then press `l` to switch to its live logs. Each log entry is an Open Cybersecurity Schema Framework (OCSF) event showing the verdict (`ALLOWED` or `DENIED`), the binary and destination endpoint, and which policy and engine made the decision. For example:
-
-```text
-NET:OPEN [MED] DENIED /usr/local/bin/claude(43) -> github.com:443 [policy:- engine:opa] [reason:endpoint github.com:443 is not allowed by any policy]
-```
-
-After the policy update, the same log view shows the request going through instead:
-
-```text
-NET:OPEN [INFO] ALLOWED /usr/bin/curl(118) -> github.com:443 [policy:my-sandbox engine:opa]
-```
-
-Switch over to the policy view to see the rule you added earlier, alongside everything else currently enforced on the sandbox. Each entry shows the binary, endpoint, access level, and enforcement mode.
-
-Alternatively, you can use the `openshell` CLI:
-
-```shell
-openshell policy get my-sandbox --full
-```
-
-
+> [!WARNING]
+> This manifest runs the dashboard with `AUTH_DISABLED=true`, so anyone who can reach it acts as a platform admin. Keep it behind `oc port-forward`; do not create a `Route` for it. For a shared deployment, `make user-auth` replaces this evaluation install with the dashboard behind an oauth2-proxy login, OIDC on the gateway and a NetworkPolicy; see [User authentication](02-user-auth.md).
 
 ## Troubleshooting
 
 - **Status shows Disconnected.** Verify the `Route` exists (`oc get route -n openshell`) and that the TLS bundle directory name matches the `--name` used in `gateway add`.
 - **Certificate validation error.** The `pkiInitJob.serverDnsNames` value may not match the `Route` hostname. Uninstall and reinstall the Helm chart with the correct value.
-- **Gateway pod not running.** Check that the SCC binding applied before the chart installed (`oc get pods -n openshell`). If needed, delete the pod to trigger a restart.
+- **Gateway pod not running.** Check the pod events (`oc describe pod -n openshell openshell-0`). A `Pending` pod usually means no default storage class.
 
 
 ## Known Limitations
 
-**Privileged SCC requirement.** The sandbox pod runs with the `privileged` Security Context Constraint. This is needed because the supervisor sets up its own network namespace, nftables rules, and Landlock LSM policies for the agent process. These operations require elevated kernel capabilities. Concretely, any container running under that service account can access host-level resources, mount arbitrary volumes, and bypass SELinux restrictions. In future, the privileged SCC will be replaced with a custom, narrowly scoped permission set.
+**Legacy read-only mode on RHCOS kernels.** OpenShift 4.x nodes run a 5.14 kernel. Before Linux 5.19, the sandbox in `v0.1.2-rhaiv.5` runs in legacy read-only mode: `getpeername()`, `accept()` with a peer-address argument, and some `sendmmsg()` paths return `EOPNOTSUPP`. Python's `ssl` module calls `getpeername()` when it wraps a socket, so HTTPS from Python (urllib, requests, httpx, and SDKs built on them) fails inside sandboxes, and local servers that accept connections (for example `opencode serve`) fail. Plain HTTP from Python and HTTPS through `curl` work.
+
+This is fixed upstream by [OpenShell #4150](https://github.com/NVIDIA/OpenShell/pull/4150) (merged 2026-10-06), which removes legacy read-only mode. We verified Python HTTPS without a shim on RHCOS 5.14 with the `odh-stable` build; the fix reaches a versioned Red Hat build after `v0.1.2-rhaiv.5`. OpenShell now documents OpenShift 4.19 as the minimum, because RHCOS kernels in 4.16 to 4.18 lack Landlock. Until you run a build with the fix, load this shim before the agent's code (for example as `sitecustomize.py` on `PYTHONPATH`):
+
+```python
+import errno, socket
+_orig = socket.socket.getpeername
+def _getpeername(self):
+    try:
+        return _orig(self)
+    except OSError as e:
+        if e.errno != errno.EOPNOTSUPP:
+            raise
+        return ("0.0.0.0", 0) if self.family == socket.AF_INET else ("::", 0, 0, 0)
+socket.socket.getpeername = _getpeername
+```
+
+**UBI Python images.** In `ubi9/python-*` images, `python3` is a virtual environment under `/opt/app-root`, which the default sandbox filesystem policy does not allow reading. Run `/usr/bin/python3.12` directly or allow the path in the sandbox policy.
 
 ## Uninstallation
 
@@ -339,7 +306,6 @@ Remove the OpenShell installation and local configuration when you are finished 
 
 ```shell
 helm uninstall openshell -n openshell
-oc adm policy remove-scc-from-user privileged -z openshell-sandbox -n openshell
 oc delete ns openshell
 rm -rf ~/.config/openshell/gateways/openshift
 ```

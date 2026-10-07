@@ -1,10 +1,16 @@
 # Running OpenShell sandboxes with Kata runtime on OpenShift
 
+> [!NOTE]
+> This guide was written for OpenShell 0.0.116 and has not been re-validated with
+> the build used by the install guide (`main` at `8719fc9`). Chart 0.1.x
+> renamed the image values (`gateway.image.*`, `supervisor.image.*`,
+> `sandboxRuntime.image.*`) and no longer needs a privileged SCC.
+
 > **Midstream Documentation**
 >
 > Treat the OpenShift installation path as experimental. Do not use it in production.
 
-This guide builds on [Getting Started with OpenShell on OpenShift](getting-started-openshell-openshift.md). You configure new sandboxes to use a Kata-backed RuntimeClass, enable sidecar topology in OpenShell, and verify the virtual machine (VM) boundary and OpenShell policy enforcement. By the end of this guide, you can run a Kata-backed sandbox and verify how this topology applies runtime and network controls.
+This guide builds on [Install OpenShell on OpenShift](01-install.md). You configure new sandboxes to use a Kata-backed RuntimeClass, enable sidecar topology in OpenShell, and verify the virtual machine (VM) boundary and OpenShell policy enforcement. By the end of this guide, you can run a Kata-backed sandbox and verify how this topology applies runtime and network controls.
 
 Perform the following steps:
 
@@ -18,7 +24,7 @@ Run all commands on your local machine unless otherwise specified.
 
 ## Prerequisites
 
-- You have completed the [Getting Started with OpenShell on OpenShift](getting-started-openshell-openshift.md) guide through the **Status Check** section.
+- You have completed [Install OpenShell on OpenShift](01-install.md) through the **Status Check** section.
 - You have installed the OpenShift sandboxed containers Operator on the cluster.
 - A Kata `RuntimeClass` is available on the cluster.
 - If you use the `kata-remote` runtime, a valid `peer-pods-cm` ConfigMap exists on the cluster.
@@ -278,7 +284,7 @@ OpenShell and Kata address different concerns. OpenShell controls outbound acces
 openshell sandbox delete kata-demo
 ```
 
-2. If you want to keep OpenShell installed but return the gateway to the configuration used in the getting-started guide, run the following command:
+2. If you want to keep OpenShell installed but return the gateway to the configuration used in the install guide, run the following command:
 
 ```shell
 helm upgrade openshell oci://ghcr.io/nvidia/openshell/helm-chart \

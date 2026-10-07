@@ -1,0 +1,42 @@
+# OpenShell dashboard 1.2.0, connected to the in-cluster gateway with the chart's mTLS client bundle.
+# No Route: open it with `oc port-forward svc/openshell-dashboard 8080:8080`. AUTH_DISABLED makes every
+# caller a platform admin, so never expose this Service outside the cluster.
+# Applied by `make dashboard`, which substitutes __NAMESPACE__.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openshell-dashboard
+  labels: {app: openshell-dashboard}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: openshell-dashboard}}
+  template:
+    metadata: {labels: {app: openshell-dashboard}}
+    spec:
+      containers:
+        - name: dashboard
+          image: quay.io/gkrumbach07/openshell-dashboard:1.2.0
+          ports: [{containerPort: 8080}]
+          env:
+            - {name: OPENSHELL_GATEWAY_URL, value: "https://openshell.__NAMESPACE__.svc:8080"}
+            - {name: GATEWAY_CA_CERT, value: /etc/openshell/client/ca.crt}
+            - {name: GATEWAY_CLIENT_CERT, value: /etc/openshell/client/tls.crt}
+            - {name: GATEWAY_CLIENT_KEY, value: /etc/openshell/client/tls.key}
+            - {name: AUTH_DISABLED, value: "true"}
+          volumeMounts: [{name: client-tls, mountPath: /etc/openshell/client, readOnly: true}]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            runAsNonRoot: true
+            seccompProfile: {type: RuntimeDefault}
+          readinessProbe: {tcpSocket: {port: 8080}, periodSeconds: 5}
+      volumes:
+        - name: client-tls
+          secret: {secretName: openshell-client-tls}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: openshell-dashboard}
+spec:
+  selector: {app: openshell-dashboard}
+  ports: [{port: 8080, targetPort: 8080}]

@@ -2,9 +2,12 @@
 
 set -euo pipefail
 
-readonly OPENSHELL_VERSION="v0.0.116"
-readonly INSTALLER_COMMIT="d1155aa70042d3e2ee49dbfa15346b108b7c1d92"
-readonly INSTALLER_SHA256="55863e314bb990733b8cc8fb369798921b4c8e791c9cdfa284e99d00648e80e7"
+# The validated gateway build is upstream main @ 8719fc9, which has no tagged CLI release.
+# The installer below comes from that commit; it installs the rolling "dev" CLI, which can be
+# newer than the gateway. The CLI used in validation was built from source at 8719fc9.
+readonly OPENSHELL_VERSION="dev"
+readonly INSTALLER_COMMIT="8719fc9f37a93dd96435cf6753ae53c8ee8809e6"
+readonly INSTALLER_SHA256="5c98a86a4b811c471b212219cb2a62d458244220ffa71ac8e3baf3700b17b871"
 readonly INSTALLER_URL="https://raw.githubusercontent.com/NVIDIA/OpenShell/${INSTALLER_COMMIT}/install.sh"
 
 usage() {
