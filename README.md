@@ -6,7 +6,7 @@ Demos, guides, and getting-started material for running [OpenShell](https://docs
 
 ### [Getting Started with OpenShell on OpenShift](guides/getting-started-openshell-openshift.md)
 
-End-to-end guide for installing OpenShell with Helm, exposing the gateway through an OpenShift Route, configuring mTLS, registering a provider, creating a sandbox, running Claude Code in the sandbox, and managing egress policies.
+End-to-end guide for installing OpenShell with Helm, exposing the gateway through an OpenShift Route, configuring mTLS, registering an OpenAI provider, creating a sandbox, running the Codex CLI in the sandbox, and managing egress policies.
 
 ### [Running OpenShell sandboxes with Kata runtime on OpenShift](guides/openshell-with-osc.md)
 

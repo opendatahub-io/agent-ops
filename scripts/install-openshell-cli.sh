@@ -2,9 +2,9 @@
 
 set -euo pipefail
 
-readonly OPENSHELL_VERSION="v0.0.116"
-readonly INSTALLER_COMMIT="d1155aa70042d3e2ee49dbfa15346b108b7c1d92"
-readonly INSTALLER_SHA256="55863e314bb990733b8cc8fb369798921b4c8e791c9cdfa284e99d00648e80e7"
+readonly OPENSHELL_VERSION="v0.1.2"
+readonly INSTALLER_COMMIT="6648bd0c290efbc41ba131ee9831ee45cd431f94"
+readonly INSTALLER_SHA256="5c98a86a4b811c471b212219cb2a62d458244220ffa71ac8e3baf3700b17b871"
 readonly INSTALLER_URL="https://raw.githubusercontent.com/NVIDIA/OpenShell/${INSTALLER_COMMIT}/install.sh"
 
 usage() {

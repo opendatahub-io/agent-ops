@@ -18,7 +18,7 @@ Run all commands on your local machine unless otherwise specified.
 
 ## Prerequisites
 
-- You have completed the [Getting Started with OpenShell on OpenShift](getting-started-openshell-openshift.md) guide through the **Status Check** section.
+- You have completed the [Getting Started with OpenShell on OpenShift](getting-started-openshell-openshift.md) guide through the **Configure an inference provider** section.
 - You have installed the OpenShift sandboxed containers Operator on the cluster.
 - A Kata `RuntimeClass` is available on the cluster.
 - If you use the `kata-remote` runtime, a valid `peer-pods-cm` ConfigMap exists on the cluster.
@@ -50,7 +50,7 @@ KATA_RUNTIMECLASS=<runtime-class-name>
 2. Update the OpenShell Helm chart to set the runtime class, sidecar topology, and binary-aware network policy:
 ```shell
 helm upgrade openshell oci://ghcr.io/nvidia/openshell/helm-chart \
-  --version 0.0.116 \
+  --version 0.1.2 \
   --namespace openshell \
   --reuse-values \
   --set supervisor.topology=sidecar \
@@ -126,13 +126,18 @@ Run the command that matches how you configured the runtime class.
 If you configured a gateway-wide default runtime class, create the sandbox by running the following command:
 
 ```shell
-openshell sandbox create --name kata-demo -- sleep 1
+openshell sandbox create --name kata-demo \
+  --from ghcr.io/nvidia/openshell-community/sandboxes/base@sha256:aeef1c63f00e2913ea002ccb3aaf925f338b5c5d70e63576f0d95c16a138044e \
+  --provider my-openai \
+  -- sleep 1
 ```
 
 If you want to override the gateway default and specify the runtime class for this sandbox only, run the following command:
 
 ```shell
 openshell sandbox create --name kata-demo \
+  --from ghcr.io/nvidia/openshell-community/sandboxes/base@sha256:aeef1c63f00e2913ea002ccb3aaf925f338b5c5d70e63576f0d95c16a138044e \
+  --provider my-openai \
   --driver-config-json "{\"kubernetes\":{\"pod\":{\"runtime_class_name\":\"${KATA_RUNTIMECLASS}\"}}}" \
   -- sleep 1
 ```
@@ -282,7 +287,7 @@ openshell sandbox delete kata-demo
 
 ```shell
 helm upgrade openshell oci://ghcr.io/nvidia/openshell/helm-chart \
-  --version 0.0.116 \
+  --version 0.1.2 \
   --namespace openshell \
   --reuse-values \
   --set supervisor.topology=combined \
@@ -293,7 +298,7 @@ If you no longer need the OpenShell installation, remove the gateway and associa
 
 ```shell
 helm uninstall openshell -n openshell
-oc adm policy remove-scc-from-user privileged -z openshell-sandbox -n openshell
 oc delete ns openshell
+openshell gateway remove openshift
 rm -rf ~/.config/openshell/gateways/openshift
 ```
