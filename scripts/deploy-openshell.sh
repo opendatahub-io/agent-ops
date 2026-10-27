@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# OpenShell v0.0.116 deployment for OpenShift
+# OpenShell deployment for OpenShift with the ODH builds of the gateway,
+# supervisor and sandbox runtime
 # Based on opendatahub-io/agent-ops pinned version testing
 
 set -euo pipefail
@@ -10,12 +11,15 @@ PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # Configuration with defaults
 NAMESPACE="${OPENSHELL_NAMESPACE:-openshell}"
 GATEWAY_NAME="${OPENSHELL_GATEWAY_NAME:-openshift}"
-HELM_VERSION="${OPENSHELL_HELM_VERSION:-0.0.116}"
-ODH_IMAGE_TAG="${ODH_IMAGE_TAG:-v0.0.116-rhaiv.0}"
+# The chart version and the ODH image tag must be the same OpenShell release.
+HELM_VERSION="${OPENSHELL_HELM_VERSION:-0.1.2}"
+ODH_IMAGE_TAG="${ODH_IMAGE_TAG:-v0.1.2-rhaiv.0}"
 GATEWAY_IMAGE_REPOSITORY="${OPENSHELL_GATEWAY_IMAGE_REPOSITORY:-quay.io/opendatahub/odh-openshell-gateway}"
 GATEWAY_IMAGE_TAG="${OPENSHELL_GATEWAY_IMAGE_TAG:-${ODH_IMAGE_TAG}}"
 SUPERVISOR_IMAGE_REPOSITORY="${OPENSHELL_SUPERVISOR_IMAGE_REPOSITORY:-quay.io/opendatahub/odh-openshell-supervisor}"
 SUPERVISOR_IMAGE_TAG="${OPENSHELL_SUPERVISOR_IMAGE_TAG:-${ODH_IMAGE_TAG}}"
+SANDBOX_RUNTIME_IMAGE_REPOSITORY="${OPENSHELL_SANDBOX_RUNTIME_IMAGE_REPOSITORY:-quay.io/opendatahub/odh-openshell-sandbox}"
+SANDBOX_RUNTIME_IMAGE_TAG="${OPENSHELL_SANDBOX_RUNTIME_IMAGE_TAG:-${ODH_IMAGE_TAG}}"
 SCC_NAME="${OPENSHELL_SCC:-openshell-sandbox-minimum-required}"
 
 # Validate inputs to prevent injection attacks
@@ -45,9 +49,24 @@ if [[ ! "$GATEWAY_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
 fi
 
 if [[ ! "$HELM_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "ERROR: Invalid Helm version. Must be in semver format (e.g., 0.0.116)." >&2
+    echo "ERROR: Invalid Helm version. Must be in semver format (e.g., 0.1.2)." >&2
     exit 1
 fi
+
+# Image repositories are <registry host>/<path>, and tags are plain tags, so
+# neither can add another value to the Helm command line.
+for repository in "$GATEWAY_IMAGE_REPOSITORY" "$SUPERVISOR_IMAGE_REPOSITORY" "$SANDBOX_RUNTIME_IMAGE_REPOSITORY"; do
+    if [[ ! "$repository" =~ ^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+$ ]]; then
+        echo "ERROR: Invalid image repository: $repository (expected registry/path, e.g. quay.io/opendatahub/odh-openshell-gateway)." >&2
+        exit 1
+    fi
+done
+for tag in "$GATEWAY_IMAGE_TAG" "$SUPERVISOR_IMAGE_TAG" "$SANDBOX_RUNTIME_IMAGE_TAG"; do
+    if [[ ! "$tag" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$ ]]; then
+        echo "ERROR: Invalid image tag: $tag" >&2
+        exit 1
+    fi
+done
 
 # Colors
 RED='\033[0;31m'
@@ -174,33 +193,34 @@ install_helm() {
     ROUTE_HOSTNAME="openshell-${NAMESPACE}.${INGRESS_DOMAIN}"
     log_info "Route hostname for certificate SANs: ${ROUTE_HOSTNAME}"
 
+    # Chart 0.1.x puts global.image.registry (ghcr.io/nvidia) in front of a
+    # repository that has no registry of its own, so each image gets its
+    # registry host and its path separately.
+    local helm_args=(
+        --version "${HELM_VERSION}"
+        --namespace "${NAMESPACE}"
+        --set "gateway.image.registry=${GATEWAY_IMAGE_REPOSITORY%%/*}"
+        --set "gateway.image.repository=${GATEWAY_IMAGE_REPOSITORY#*/}"
+        --set-string "gateway.image.tag=${GATEWAY_IMAGE_TAG}"
+        --set "supervisor.image.registry=${SUPERVISOR_IMAGE_REPOSITORY%%/*}"
+        --set "supervisor.image.repository=${SUPERVISOR_IMAGE_REPOSITORY#*/}"
+        --set-string "supervisor.image.tag=${SUPERVISOR_IMAGE_TAG}"
+        --set "sandboxRuntime.image.registry=${SANDBOX_RUNTIME_IMAGE_REPOSITORY%%/*}"
+        --set "sandboxRuntime.image.repository=${SANDBOX_RUNTIME_IMAGE_REPOSITORY#*/}"
+        --set-string "sandboxRuntime.image.tag=${SANDBOX_RUNTIME_IMAGE_TAG}"
+        --set podSecurityContext.fsGroup=null
+        --set securityContext.runAsUser=null
+        --set server.auth.allowUnauthenticatedUsers=true
+        --set "pkiInitJob.serverDnsNames[0]=${ROUTE_HOSTNAME}"
+    )
+
     # Check if already installed
     if helm list -n "${NAMESPACE}" | grep -q "^openshell"; then
         log_info "OpenShell already installed, upgrading..."
-        helm upgrade openshell oci://ghcr.io/nvidia/openshell/helm-chart \
-            --version "${HELM_VERSION}" \
-            --namespace "${NAMESPACE}" \
-            --set image.repository="${GATEWAY_IMAGE_REPOSITORY}" \
-            --set image.tag="${GATEWAY_IMAGE_TAG}" \
-            --set supervisor.image.repository="${SUPERVISOR_IMAGE_REPOSITORY}" \
-            --set supervisor.image.tag="${SUPERVISOR_IMAGE_TAG}" \
-            --set podSecurityContext.fsGroup=null \
-            --set securityContext.runAsUser=null \
-            --set server.auth.allowUnauthenticatedUsers=true \
-            --set "pkiInitJob.serverDnsNames[0]=${ROUTE_HOSTNAME}"
+        helm upgrade openshell oci://ghcr.io/nvidia/openshell/helm-chart "${helm_args[@]}"
     else
         log_info "Installing OpenShell ${HELM_VERSION}..."
-        helm install openshell oci://ghcr.io/nvidia/openshell/helm-chart \
-            --version "${HELM_VERSION}" \
-            --namespace "${NAMESPACE}" \
-            --set image.repository="${GATEWAY_IMAGE_REPOSITORY}" \
-            --set image.tag="${GATEWAY_IMAGE_TAG}" \
-            --set supervisor.image.repository="${SUPERVISOR_IMAGE_REPOSITORY}" \
-            --set supervisor.image.tag="${SUPERVISOR_IMAGE_TAG}" \
-            --set podSecurityContext.fsGroup=null \
-            --set securityContext.runAsUser=null \
-            --set server.auth.allowUnauthenticatedUsers=true \
-            --set "pkiInitJob.serverDnsNames[0]=${ROUTE_HOSTNAME}"
+        helm install openshell oci://ghcr.io/nvidia/openshell/helm-chart "${helm_args[@]}"
     fi
 
     log_info "OpenShell installed successfully"
@@ -306,6 +326,7 @@ display_info() {
     log_info "Version: ${HELM_VERSION}"
     log_info "Gateway image: ${GATEWAY_IMAGE_REPOSITORY}:${GATEWAY_IMAGE_TAG}"
     log_info "Supervisor image: ${SUPERVISOR_IMAGE_REPOSITORY}:${SUPERVISOR_IMAGE_TAG}"
+    log_info "Sandbox runtime image: ${SANDBOX_RUNTIME_IMAGE_REPOSITORY}:${SANDBOX_RUNTIME_IMAGE_TAG}"
     echo ""
     log_info "Check status:"
     echo "  openshell status"
