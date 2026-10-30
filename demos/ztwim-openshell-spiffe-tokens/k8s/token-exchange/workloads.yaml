@@ -1,0 +1,215 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Adapted from NVIDIA/OpenShell examples/spiffe-token-exchange-demo/k8s/workloads.yaml
+# for the ZTWIM integration demo:
+# - SPIRE_JWKS_URI / SPIRE_ISSUER point at the ZTWIM OIDC discovery provider's
+#   managed Route (JWT issuer of the ZTWIM SPIRE server). The demo scripts
+#   substitute __CLUSTER_DOMAIN__ with the target cluster's ingress domain.
+# - The Route serves a publicly trusted certificate (the OpenShift ingress
+#   certificate), so the JWKS fetch uses the system trust store - the upstream
+#   spiffe-helper sidecar and SPIRE_JWKS_CA_FILE are not needed.
+# - SUPERVISOR_TRUST_DOMAIN_PREFIX / GATEWAY_TRUST_DOMAIN_PREFIX match the
+#   ZTWIM default workload registration shape
+#   spiffe://<trust-domain>/ns/<namespace>/sa/<serviceaccount>.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: token-exchange-issuer
+  namespace: default
+  labels:
+    app: token-exchange-issuer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: token-exchange-issuer
+  template:
+    metadata:
+      labels:
+        app: token-exchange-issuer
+    spec:
+      containers:
+        - name: token-exchange-issuer
+          image: node:22-alpine
+          imagePullPolicy: IfNotPresent
+          command: ["node", "/demo/token-issuer.js"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: ACCESS_TOKEN_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: openshell-spiffe-token-exchange-demo
+                  key: access-token-secret
+            - name: ACCESS_TOKEN_ISSUER
+              value: http://token-exchange-issuer.default.svc.cluster.local
+            - name: SPIRE_JWKS_URI
+              value: https://spire-spiffe-oidc-discovery-provider.__CLUSTER_DOMAIN__/keys
+            - name: SPIRE_ISSUER
+              value: https://spire-spiffe-oidc-discovery-provider.__CLUSTER_DOMAIN__
+            - name: JWT_SVID_AUDIENCE
+              value: http://token-exchange-issuer.default.svc.cluster.local
+            - name: SUPERVISOR_TRUST_DOMAIN_PREFIX
+              value: spiffe://__CLUSTER_DOMAIN__/ns/
+            - name: GATEWAY_TRUST_DOMAIN_PREFIX
+              value: spiffe://__CLUSTER_DOMAIN__/ns/
+            - name: DEMO_USER_SUBJECT
+              value: demo-user
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          volumeMounts:
+            - name: scripts
+              mountPath: /demo
+              readOnly: true
+      volumes:
+        - name: scripts
+          configMap:
+            name: openshell-spiffe-token-exchange-demo-scripts
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: token-exchange-issuer
+  namespace: default
+spec:
+  selector:
+    app: token-exchange-issuer
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alpha-exchange
+  namespace: default
+  labels:
+    app: alpha-exchange
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alpha-exchange
+  template:
+    metadata:
+      labels:
+        app: alpha-exchange
+    spec:
+      containers:
+        - name: alpha-exchange
+          image: node:22-alpine
+          imagePullPolicy: IfNotPresent
+          command: ["node", "/demo/protected-service.js"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: SERVICE_NAME
+              value: alpha
+            - name: EXPECTED_AUDIENCE
+              value: alpha
+            - name: EXPECTED_SCOPE
+              value: alpha
+            - name: ACCESS_TOKEN_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: openshell-spiffe-token-exchange-demo
+                  key: access-token-secret
+            - name: ACCESS_TOKEN_ISSUER
+              value: http://token-exchange-issuer.default.svc.cluster.local
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          volumeMounts:
+            - name: scripts
+              mountPath: /demo
+              readOnly: true
+      volumes:
+        - name: scripts
+          configMap:
+            name: openshell-spiffe-token-exchange-demo-scripts
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alpha-exchange
+  namespace: default
+spec:
+  selector:
+    app: alpha-exchange
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: beta-exchange
+  namespace: default
+  labels:
+    app: beta-exchange
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: beta-exchange
+  template:
+    metadata:
+      labels:
+        app: beta-exchange
+    spec:
+      containers:
+        - name: beta-exchange
+          image: node:22-alpine
+          imagePullPolicy: IfNotPresent
+          command: ["node", "/demo/protected-service.js"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: SERVICE_NAME
+              value: beta
+            - name: EXPECTED_AUDIENCE
+              value: beta
+            - name: EXPECTED_SCOPE
+              value: beta
+            - name: ACCESS_TOKEN_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: openshell-spiffe-token-exchange-demo
+                  key: access-token-secret
+            - name: ACCESS_TOKEN_ISSUER
+              value: http://token-exchange-issuer.default.svc.cluster.local
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          volumeMounts:
+            - name: scripts
+              mountPath: /demo
+              readOnly: true
+      volumes:
+        - name: scripts
+          configMap:
+            name: openshell-spiffe-token-exchange-demo-scripts
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: beta-exchange
+  namespace: default
+spec:
+  selector:
+    app: beta-exchange
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
