@@ -16,6 +16,10 @@ Configure OpenShell sandboxes to use a Kata-backed `RuntimeClass` in `sidecar` t
 
 Route sandbox inference traffic through a token-authenticated RHOAI-served model using the OpenShell privacy router, without exposing credentials to the sandbox.
 
+### [User authentication with your own Keycloak](guides/user-auth-keycloak.md)
+
+Architecture and setup for OpenShell gateways and dashboards that sign users in through an externally managed Keycloak realm: groups, an audience and roles per gateway, the installer configuration for the gateway and the dashboard, and CLI login. [Workspaces and membership](guides/user-auth-workspaces.md) continues from there: who may use which workspace once OIDC is on.
+
 ### [OpenShell Capability Testing and Security Analysis](scc-requirements.md)
 
 Testing results for OpenShell v0.0.85 on OpenShift, including capability behavior in the supervisor and sandbox user contexts.
