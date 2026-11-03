@@ -1,0 +1,24 @@
+{
+  "name": "red-compass-web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 0.0.0.0",
+    "build": "next build",
+    "start": "next start --hostname 0.0.0.0",
+    "format": "prettier --write \"app/**/*.{ts,tsx,css}\" next.config.ts tsconfig.json package.json",
+    "format:check": "prettier --check \"app/**/*.{ts,tsx,css}\" next.config.ts tsconfig.json package.json"
+  },
+  "dependencies": {
+    "next": "^16.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "prettier": "3.9.10",
+    "typescript": "^5.8.0"
+  }
+}

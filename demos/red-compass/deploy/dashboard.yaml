@@ -1,0 +1,183 @@
+# Dashboard template: scripts/expose_dashboard.py derives the real Route and callback host.
+# Actual ODH dashboard behind the cluster-release OpenShift OAuth proxy.
+# Backend listens on loopback; the Route and Service target only the proxy.
+# Access requires get permission on the operator TLS Secret in openshell.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openshell-dashboard
+  namespace: openshell
+  annotations:
+    serviceaccounts.openshift.io/oauth-redirectreference.primary: '{"kind":"OAuthRedirectReference","apiVersion":"v1","reference":{"kind":"Route","name":"openshell-dashboard"}}'
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openshell-dashboard
+  namespace: openshell
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openshell-dashboard
+  template:
+    metadata:
+      labels:
+        app: openshell-dashboard
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: dashboard
+        image: quay.io/opendatahub/odh-openshell-dashboard:9a68df0ee2ced156b8c7948a55e6247c35ef38d8
+        env:
+        - name: PORT
+          value: '8080'
+        - name: AUTH_DISABLED
+          value: 'true'
+        - name: OPENSHELL_GATEWAY_URL
+          value: https://openshell.openshell.svc.cluster.local:8080
+        - name: GATEWAY_CA_CERT
+          value: /tls/ca.crt
+        - name: GATEWAY_CLIENT_CERT
+          value: /tls/tls.crt
+        - name: GATEWAY_CLIENT_KEY
+          value: /tls/tls.key
+        - name: LISTEN_ADDRESS
+          value: 127.0.0.1
+        volumeMounts:
+        - name: tls
+          mountPath: /tls
+          readOnly: true
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        readinessProbe:
+          exec:
+            command:
+            - /usr/local/bin/openshell-dashboard
+            - --healthcheck
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            memory: 512Mi
+      - name: oauth-proxy
+        image: quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:e415d1767cbf3b8bb88beca8caef9c1cb8c894ca3800f1d086b3c6e86ea0ebc0
+        ports:
+        - name: oauth
+          containerPort: 8888
+        args:
+        - --provider=openshift
+        - --openshift-service-account=openshell-dashboard
+        - --http-address=0.0.0.0:8888
+        - --https-address=
+        - --upstream=http://127.0.0.1:8080
+        - --cookie-secret-file=/oauth/cookie-secret
+        - --cookie-secure=true
+        - --email-domain=*
+        - --skip-provider-button=true
+        - --redirect-url=https://dashboard.example.com/oauth/callback
+        - --openshift-sar={"namespace":"openshell","resource":"secrets","resourceName":"openshell-client-tls","verb":"get"}
+        volumeMounts:
+        - name: oauth-cookie
+          mountPath: /oauth
+          readOnly: true
+        - name: oauth-service-account
+          mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+          readOnly: true
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        readinessProbe:
+          tcpSocket:
+            port: 8888
+        resources:
+          requests:
+            cpu: 10m
+            memory: 64Mi
+          limits:
+            memory: 256Mi
+      volumes:
+      - name: tls
+        secret:
+          secretName: openshell-client-tls
+      - name: oauth-cookie
+        secret:
+          secretName: openshell-dashboard-oauth
+      - name: oauth-service-account
+        projected:
+          sources:
+          - serviceAccountToken:
+              path: token
+              expirationSeconds: 3600
+          - configMap:
+              name: kube-root-ca.crt
+              items:
+              - key: ca.crt
+                path: ca.crt
+          - downwardAPI:
+              items:
+              - path: namespace
+                fieldRef:
+                  fieldPath: metadata.namespace
+      serviceAccountName: openshell-dashboard
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openshell-dashboard
+  namespace: openshell
+spec:
+  selector:
+    app: openshell-dashboard
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8888
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: dashboard-local-demo
+  namespace: openshell
+spec:
+  podSelector:
+    matchLabels:
+      app: openshell-dashboard
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          network.openshift.io/policy-group: ingress
+    ports:
+    - protocol: TCP
+      port: 8888
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: openshell-dashboard
+  namespace: openshell
+spec:
+  host: dashboard.example.com
+  to:
+    kind: Service
+    name: openshell-dashboard
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
