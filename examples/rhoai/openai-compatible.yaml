@@ -1,0 +1,20 @@
+# Replace the host with the RHOAI Route hostname (no scheme or path).
+# Set binaries to the canonical executable paths in your workload image.
+id: rhoai-openai
+display_name: RHOAI OpenAI-compatible API
+description: Authenticated RHOAI model serving endpoint
+category: inference
+inference_capable: true
+credentials:
+  - name: api_key
+    env_vars: [OPENAI_API_KEY]
+    required: true
+    auth_style: bearer
+    header_name: authorization
+endpoints:
+  - host: model.example.com
+    port: 443
+    protocol: rest
+    access: read-write
+    enforcement: enforce
+binaries: [/usr/bin/curl]
