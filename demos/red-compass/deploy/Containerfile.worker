@@ -1,0 +1,8 @@
+FROM registry.access.redhat.com/ubi9/python-312:latest
+USER 0
+WORKDIR /app
+COPY backend /app/backend
+RUN pip install --no-cache-dir 'openshell==0.1.7' 'fastapi>=0.115,<1' 'sqlalchemy>=2,<3' 'psycopg[binary]>=3.2,<4' 'pydantic-settings>=2,<3' 'pyjwt>=2.10,<3' 'pgvector>=0.3,<1'
+ENV PYTHONPATH=/app/backend PYTHONUNBUFFERED=1
+USER 1001
+CMD ["python3.12", "-m", "red_compass.worker"]

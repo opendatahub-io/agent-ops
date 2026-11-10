@@ -1,0 +1,7 @@
+{
+  "chart": "oci://ghcr.io/nvidia/openshell/helm-chart",
+  "chart_version": "0.1.7",
+  "sdk_version": "0.1.7",
+  "runtime_release": "v0.1.6-rhaiv.3",
+  "dashboard_tag": "9a68df0ee2ced156b8c7948a55e6247c35ef38d8"
+}

@@ -1,0 +1,110 @@
+[
+  {
+    "key": "lantern",
+    "owner": "alex",
+    "proposal": {
+      "title": "Restore the Lantern Lane evening light",
+      "parcel_id": "RC-101",
+      "work_type": "repair",
+      "start_date": "2027-07-12",
+      "end_date": "2027-07-16",
+      "height_m": 2,
+      "footprint_m2": 12,
+      "materials": "Preserve original visible stone and metal; hidden LED internals only",
+      "colour": "Unchanged stone grey; no joinery changes",
+      "intended_use": "Unchanged public evening lantern",
+      "narrative": "Repair the existing protected public evening lantern. Replace only failed hidden lighting components with LEDs. Preserve outward form, visible material, height, footprint and historic public evening-light function. No excavation or drainage changes.",
+      "drainage_changes": false
+    }
+  },
+  {
+    "key": "stair",
+    "owner": "alex",
+    "proposal": {
+      "title": "Reopen the ceremonial stair for commuters",
+      "parcel_id": "RC-104",
+      "work_type": "repair",
+      "start_date": "2027-07-12",
+      "end_date": "2027-07-16",
+      "height_m": 2,
+      "footprint_m2": 24,
+      "materials": "Matching original stone",
+      "colour": "Stone grey",
+      "intended_use": "Everyday commuter access",
+      "narrative": "Repair the ceremonial stair with matching original stone within its existing height and footprint. Reopen the staircase for everyday commuter access rather than ceremonial occasions. No drainage changes or groundworks.",
+      "drainage_changes": false
+    }
+  },
+  {
+    "key": "pavilion",
+    "owner": "sam",
+    "proposal": {
+      "title": "Freestanding garden reading pavilion",
+      "parcel_id": "RC-103",
+      "work_type": "new_structure",
+      "start_date": "2027-07-12",
+      "end_date": "2027-07-16",
+      "height_m": 2,
+      "footprint_m2": 12,
+      "materials": "Timber on removable surface pads",
+      "colour": "Natural timber",
+      "intended_use": "Unchanged private garden",
+      "narrative": "Place a freestanding timber reading pavilion on surface pads in the existing private garden. Removal requires no excavation and restores the former garden use. No frontage wall, canal silhouette change, foundations or drainage changes.",
+      "drainage_changes": false
+    }
+  },
+  {
+    "key": "habitat",
+    "owner": "sam",
+    "proposal": {
+      "title": "Temporary pavilion during nesting season",
+      "parcel_id": "RC-102",
+      "work_type": "new_structure",
+      "start_date": "2027-04-12",
+      "end_date": "2027-04-15",
+      "height_m": 2,
+      "footprint_m2": 12,
+      "materials": "Removable timber panels",
+      "colour": "Natural timber",
+      "intended_use": "Unchanged private garden",
+      "narrative": "Install a temporary timber garden pavilion beside the canal in April. The exterior work is completely reversible without excavation and preserves garden use. We request the reversible-work exemption even though the environmental register may have habitat restrictions.",
+      "drainage_changes": false
+    }
+  },
+  {
+    "key": "missing-evidence",
+    "owner": "alex",
+    "proposal": {
+      "title": "Repair a structure on an unregistered parcel",
+      "parcel_id": "RC-999",
+      "work_type": "repair",
+      "start_date": "2027-07-12",
+      "end_date": "2027-07-16",
+      "height_m": 2,
+      "footprint_m2": 12,
+      "materials": "Matching existing visible materials",
+      "colour": "Unchanged natural colour",
+      "intended_use": "Unchanged private garden",
+      "narrative": "Repair a small existing garden structure at unchanged dimensions and use. We cannot supply authoritative parcel or heritage records. Please check whether the site is permitted under the construction code.",
+      "drainage_changes": false
+    }
+  },
+  {
+    "key": "emergency-drain",
+    "owner": "sam",
+    "proposal": {
+      "title": "Emergency repair of a failed garden drain",
+      "parcel_id": "RC-103",
+      "work_type": "groundworks",
+      "start_date": "2027-09-14",
+      "end_date": "2027-09-15",
+      "height_m": 2,
+      "footprint_m2": 0,
+      "materials": "Matching existing drain pipe, buried in the existing trench",
+      "colour": "Unchanged natural colour",
+      "intended_use": "Unchanged private garden",
+      "narrative": "Emergency repair of an existing failed drain causing immediate flooding. Repair only the existing route and discharge point in the original trench; preserve drainage direction and existing discharge rights. No new permanent footprint or added capacity. The private garden use is unchanged.",
+      "drainage_changes": false
+    }
+  }
+]
