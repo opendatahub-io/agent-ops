@@ -123,9 +123,10 @@ oc get node "$NODE_NAME" -o jsonpath='{.status.nodeInfo.kernelVersion}{"\n"}'
 ```
 
 The sandbox filesystem policy can restrict access to DMI paths, so these
-optional diagnostics use Kubernetes exec. DMI values vary by hypervisor and guest image. Use the workload's RuntimeClass
-and successful execution alongside these diagnostics to verify the intended
-runtime. DMI output alone is not an isolation security assessment.
+optional diagnostics use Kubernetes exec. DMI values vary by hypervisor and guest
+image. Use the workload's RuntimeClass and successful execution alongside these
+diagnostics to verify the intended runtime. DMI output alone is not an isolation
+security assessment.
 
 ## 4. Verify network policy
 
@@ -169,9 +170,9 @@ seccomp and filesystem controls.
 
 Validation passed on OpenShift `4.22.22`, OpenShift sandboxed containers Operator
 `1.13.1` and Red Hat build of Agent Sandbox `0.9.0`, using the `kata` RuntimeClass.
-The workload ran under `restricted-v2` without added capabilities, a privileged
-SCC grant or host initramfs changes. Peer pods (`kata-remote`),
-GPU runtimes and other guest kernel combinations need separate validation.
+The workload ran under `restricted-v2` without added capabilities. Peer pods
+(`kata-remote`), GPU runtimes and other guest kernel combinations need separate
+validation.
 
 ## Troubleshooting
 
