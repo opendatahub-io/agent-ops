@@ -15,11 +15,11 @@ names throughout if you already have an installation.
 
 ## Prerequisites
 
-- You have access to an isolated test OpenShift cluster. This guide was validated on ROSA with OpenShift 4.19.55 and Red Hat build of Agent Sandbox 0.9.0. This records a tested combination, not a minimum-version support statement.
+- You have access to an isolated test OpenShift cluster. This guide was validated on ROSA with OpenShift 4.19.55 and Red Hat build of Agent Sandbox 0.9.0.
 - You have cluster administrator permissions.
 - You have installed the OpenShift CLI (`oc`) locally.
 - You have Helm installed locally.
-- The Red Hat build of Agent Sandbox v0.9.0 is installed on the cluster via the Software Catalog. Find the actual controller namespace in your installation; the validation cluster runs it in `agent-sandbox-system`.
+- The Red Hat build of Agent Sandbox v0.9.0 is installed on the cluster via the Software Catalog.
 - You have obtained credentials for a supported inference provider. This guide uses an Anthropic Claude model served through Google Vertex AI as the example. OpenShell also supports other provider types; configuration requirements differ by provider. See [Provider profiles](https://docs.nvidia.com/openshell/latest/how-it-works/providers/profiles) for the access and credential contract.
 - The Google Cloud CLI (`gcloud`) is installed and authenticated with Application Default Credentials (`gcloud auth application-default login`). Only required when using the Vertex AI example provider.
 
@@ -36,33 +36,19 @@ names throughout if you already have an installation.
 
 ## Install the OpenShell CLI
 
-Download the upstream installer from the immutable OpenShell `v0.1.7` commit,
-verify its checksum, and select the `v0.1.7` release explicitly:
+Run the repository's installer script. It downloads the upstream installer from
+an immutable commit, verifies its SHA-256 checksum, and installs CLI `v0.1.7`:
 
 ```shell
-(
-  set -eu
-  curl --fail --show-error --location \
-    https://raw.githubusercontent.com/NVIDIA/OpenShell/5d25211b25a8fc887e8d5c606d57d6ab22f1d76c/install.sh \
-    --output install-openshell.sh
-  EXPECTED_SHA256=04c1a437d4a4fc11930d75a336fc4f52bf0c95251e8469c306e407e203769ae7
-  if command -v sha256sum >/dev/null 2>&1; then
-    echo "${EXPECTED_SHA256}  install-openshell.sh" | sha256sum --check -
-  else
-    echo "${EXPECTED_SHA256}  install-openshell.sh" | shasum -a 256 --check -
-  fi
-  OPENSHELL_VERSION=v0.1.7 sh install-openshell.sh
-  openshell --version
-)
+./scripts/install-openshell-cli.sh
+openshell --version
 ```
 
-Continue only if the checksum check succeeds. Expect `openshell 0.1.7`.
+Expect `openshell 0.1.7`.
 
 ## Create the OpenShell namespace
 
-Create a dedicated namespace before installing the chart. The tested release
-runs the gateway, supervisor and workload under `restricted-v2` without added
-capabilities. Do not grant the old privileged SCC for this procedure.
+Create a dedicated namespace for OpenShell:
 
 ```shell
 oc create ns openshell
@@ -81,7 +67,7 @@ echo "$ROUTE_HOST"
 ## Install OpenShell with Helm
 
 This guide pairs upstream CLI `0.1.7` and chart `0.1.7` with ODH runtime
-build `v0.1.7-rhaiv.0`. The CLI and runtime version strings differ intentionally.
+build `v0.1.7-rhaiv.0`.
 See the [release chart README](https://github.com/NVIDIA/OpenShell/blob/5d25211b25a8fc887e8d5c606d57d6ab22f1d76c/deploy/helm/openshell/README.md)
 for the chart's configuration surface.
 
@@ -94,9 +80,8 @@ assign the gateway's UID/GID, and unauthenticated user access stays disabled.
 ODH_IMAGE_TAG=v0.1.7-rhaiv.0
 ```
 
-Chart `0.1.7` uses `gateway.image.*`, replacing the old top-level `image.*`
-settings. The sandbox runtime supplies OpenShell's workload boundary; the
-application image containing Claude Code is selected separately below.
+The sandbox runtime supplies OpenShell's workload boundary. Select the
+application image containing Claude Code in the workload setup below.
 
 Choose **one** database backend. Both installation options use the same
 runtime images and Route certificate configuration.
@@ -294,13 +279,10 @@ openshell provider create \
 
 Provider creation configures gateway-managed refresh and mints the first access
 token. The ADC file and refresh token remain outside the sandbox. Configure a
-model and location enabled in your project; `global` is the example location,
-not a promise that every model supports it.
+model and location enabled in your project. This example uses `global`.
 
-This replaces the old managed inference workflow. There is no
-`providers_v2_enabled` setting to enable, `openshell inference set` command, or
-`inference.local` endpoint. Claude calls Vertex's native API; OpenShell authorizes
-the request and replaces its credential placeholder at the approved endpoint.
+Claude calls Vertex's native API. OpenShell authorizes the request and replaces
+its credential placeholder at the approved endpoint.
 See [OpenShell Google providers](https://docs.nvidia.com/openshell/latest/how-it-works/providers/google)
 and [Claude Code on Vertex AI](https://code.claude.com/docs/en/google-vertex-ai)
 for the native provider behavior.
@@ -335,8 +317,8 @@ claude --bare --model claude-sonnet-4-6 --print \
 Expect `VERTEX_OK`. A real model response establishes that the provider,
 profile, workload and native endpoint work together. To continue interactively,
 run `claude --bare --model claude-sonnet-4-6` in the same shell.
-`--model` selects the model in the client, not on the gateway. Replace the model
-ID if your project enables a different Claude model.
+`--model` selects the model used by the client. Use a model ID enabled in your
+project.
 
 ## Update the egress policy
 
@@ -346,13 +328,11 @@ Ask Claude, or your agent of choice, to curl `https://github.com`. The default p
 curl -I --max-time 20 https://github.com
 ```
 
-Expect failure with a matching OCSF denial. The current transparent network
-path can return curl exit 7 rather than the old CONNECT/403 response. A DNS or
-TLS failure by itself is not evidence of policy enforcement.
+Expect curl to fail. Confirm an OCSF `DENIED` event for the curl binary and
+`github.com:443` in the audit logs.
 
 From your local machine, resolve curl's canonical executable path inside your
-workload image and allow that binary. This avoids assuming curl is installed
-at `/usr/bin/curl`:
+workload image and allow that binary:
 
 ```shell
 CURL_BINARY=$(openshell sandbox exec my-sandbox -- sh -c 'readlink -f "$(command -v curl)"')
