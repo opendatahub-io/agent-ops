@@ -1,349 +1,96 @@
 #!/usr/bin/env bash
-# OpenShell v0.0.116 deployment for OpenShift
-# Based on opendatahub-io/agent-ops pinned version testing
-
+# Install OpenShell 0.1.7 on OpenShift using ODH runtime images.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
-
-# Configuration with defaults
 NAMESPACE="${OPENSHELL_NAMESPACE:-openshell}"
 GATEWAY_NAME="${OPENSHELL_GATEWAY_NAME:-openshift}"
-HELM_VERSION="${OPENSHELL_HELM_VERSION:-0.0.116}"
-ODH_IMAGE_TAG="${ODH_IMAGE_TAG:-v0.0.116-rhaiv.0}"
-GATEWAY_IMAGE_REPOSITORY="${OPENSHELL_GATEWAY_IMAGE_REPOSITORY:-quay.io/opendatahub/odh-openshell-gateway}"
-GATEWAY_IMAGE_TAG="${OPENSHELL_GATEWAY_IMAGE_TAG:-${ODH_IMAGE_TAG}}"
-SUPERVISOR_IMAGE_REPOSITORY="${OPENSHELL_SUPERVISOR_IMAGE_REPOSITORY:-quay.io/opendatahub/odh-openshell-supervisor}"
-SUPERVISOR_IMAGE_TAG="${OPENSHELL_SUPERVISOR_IMAGE_TAG:-${ODH_IMAGE_TAG}}"
-SCC_NAME="${OPENSHELL_SCC:-openshell-sandbox-minimum-required}"
+HELM_VERSION="${OPENSHELL_HELM_VERSION:-0.1.7}"
+VALUES_FILE="${SCRIPT_DIR}/../examples/openshift/values-odh.yaml"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/openshell/gateways/${GATEWAY_NAME}"
+OWNER_LABEL="agent-ops.opendatahub.io/managed"
 
-# Validate inputs to prevent injection attacks
-if [[ ! "$NAMESPACE" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
-    echo "ERROR: Invalid namespace name. Must match Kubernetes naming conventions." >&2
-    exit 1
+fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+[[ "$NAMESPACE" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ && ${#NAMESPACE} -le 63 ]] || fail 'Invalid namespace.'
+case "$NAMESPACE" in default|kube-*|openshift-*|agent-sandbox-system|kubernetes-dashboard) fail 'Choose an unused application namespace.' ;; esac
+[[ "$GATEWAY_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || fail 'Invalid gateway name.'
+[[ "$HELM_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail 'Invalid chart version.'
+[[ -r "$VALUES_FILE" ]] || fail "Shared Helm values not found: $VALUES_FILE"
+for tool in oc helm openshell base64; do command -v "$tool" >/dev/null || fail "Missing command: $tool"; done
+CLI_VERSION=$(openshell --version)
+[[ "$CLI_VERSION" == "openshell ${HELM_VERSION}" || "$CLI_VERSION" == "openshell ${HELM_VERSION}-"* ]] || fail "CLI/chart mismatch: ${CLI_VERSION}; install the matching CLI with ${SCRIPT_DIR}/install-openshell-cli.sh."
+[[ ! -e "$CONFIG_DIR" ]] || fail "Gateway configuration already exists: ${GATEWAY_NAME}. Choose OPENSHELL_GATEWAY_NAME without overwriting it."
+oc cluster-info >/dev/null
+oc get crd sandboxes.agents.x-k8s.io >/dev/null || fail 'Install Red Hat build of Agent Sandbox 0.9.0 via Software Catalog first.'
+DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
+[[ -n "$DOMAIN" ]] || fail 'Cluster ingress domain is empty.'
+ROUTE_HOST="openshell-${NAMESPACE}.${DOMAIN}"
+
+if [[ -n "$(oc get namespace "$NAMESPACE" --ignore-not-found -o name)" ]]; then
+    [[ "$(oc get namespace "$NAMESPACE" -o jsonpath='{.metadata.labels.agent-ops\.opendatahub\.io/managed}')" == true ]] || fail 'Namespace exists and is not owned by this helper.'
+else
+    oc create namespace "$NAMESPACE"
+    oc label namespace "$NAMESPACE" "${OWNER_LABEL}=true"
 fi
+NAMESPACE_UID=$(oc get namespace "$NAMESPACE" -o jsonpath='{.metadata.uid}')
+[[ -n "$NAMESPACE_UID" ]] || fail 'Could not read namespace identity.'
 
-# Enforce Kubernetes DNS label length limit (63 characters)
-if [[ ${#NAMESPACE} -gt 63 ]]; then
-    echo "ERROR: Namespace name too long (${#NAMESPACE} chars). Maximum is 63 characters." >&2
-    exit 1
+helm_args=(
+    upgrade --install openshell oci://ghcr.io/nvidia/openshell/helm-chart
+    --version "$HELM_VERSION" --namespace "$NAMESPACE"
+    -f "$VALUES_FILE"
+    --set "pkiInitJob.serverDnsNames[0]=$ROUTE_HOST"
+    --wait --timeout 5m
+)
+
+# Optional environment overrides take precedence over the shared defaults.
+if [[ -n "${ODH_IMAGE_TAG:-}" ]]; then
+    for component in gateway supervisor sandboxRuntime; do
+        helm_args+=(--set-string "$component.image.tag=$ODH_IMAGE_TAG")
+    done
 fi
-
-# Reject protected OpenShift/Kubernetes system namespaces
-case "$NAMESPACE" in
-    default|kube-*|openshift-*|kubernetes-dashboard)
-        echo "ERROR: Cannot use protected system namespace: $NAMESPACE" >&2
-        echo "This script only manages namespaces it creates." >&2
-        exit 1
-        ;;
-esac
-
-if [[ ! "$GATEWAY_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
-    echo "ERROR: Invalid gateway name. Must be alphanumeric with dots, underscores, or hyphens." >&2
-    exit 1
-fi
-
-if [[ ! "$HELM_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "ERROR: Invalid Helm version. Must be in semver format (e.g., 0.0.116)." >&2
-    exit 1
-fi
-
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-log_info() {
-    echo -e "${GREEN}[INFO]${NC} $*"
-}
-
-log_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $*"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $*"
-}
-
-log_step() {
-    echo -e "${BLUE}==>${NC} $*"
-}
-
-# Check prerequisites
-check_prerequisites() {
-    log_step "Checking prerequisites..."
-
-    # Check oc
-    if ! command -v oc &> /dev/null; then
-        log_error "OpenShift CLI (oc) is not installed. Please install it and try again."
-        exit 1
+add_image_overrides() {
+    local component="$1" repository="$2" tag="$3"
+    if [[ -n "$repository" ]]; then
+        [[ "$repository" == */* ]] || fail 'Image repositories must include their registry.'
+        helm_args+=(
+            --set-string "$component.image.registry=${repository%%/*}"
+            --set-string "$component.image.repository=${repository#*/}"
+        )
     fi
-    log_info "Using OpenShift CLI (oc)"
-
-    # Check helm
-    if ! command -v helm &> /dev/null; then
-        log_error "Helm is not installed. Please install it and try again."
-        exit 1
-    fi
-
-    # Check openshell CLI
-    if ! command -v openshell &> /dev/null; then
-        log_error "OpenShell CLI is not installed. Install with:"
-        log_error "  ${SCRIPT_DIR}/install-openshell-cli.sh"
-        exit 1
-    fi
-    log_info "OpenShell CLI: $(openshell --version 2>&1 | head -1 || echo 'installed')"
-
-    # Check cluster connectivity
-    if ! oc cluster-info &> /dev/null; then
-        log_error "Cannot connect to cluster. Please check your kubeconfig."
-        exit 1
-    fi
-
-    log_info "Cluster: $(oc cluster-info | head -1)"
-}
-
-# Check Agent Sandbox CRD
-check_agent_sandbox() {
-    log_step "Checking for Agent Sandbox CRD..."
-
-    if oc get crd sandboxes.agents.x-k8s.io &> /dev/null; then
-        log_info "Agent Sandbox CRD is installed ✓"
-
-        # Check if it's the Red Hat build
-        if oc get deployment -n agent-sandbox-system agent-sandbox-controller &> /dev/null; then
-            local image=$(oc get deployment -n agent-sandbox-system agent-sandbox-controller -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "unknown")
-            log_info "Controller image: ${image}"
-        fi
-        return 0
-    else
-        log_error "Agent Sandbox CRD not found!"
-        log_error ""
-        log_error "RECOMMENDED: Install the Red Hat build of Agent Sandbox v0.9.0 from:"
-        log_error "  OpenShift Console → OperatorHub → Search for 'Agent Sandbox'"
-        log_error ""
-        log_error "Alternatively, install a specific pinned upstream version (NOT 'latest'):"
-        log_error "  # Example for v0.9.0 (pin to a specific version):"
-        log_error "  kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v0.9.0/sandbox-with-extensions.yaml"
-        log_error ""
-        log_error "WARNING: Never use 'releases/latest' - always pin to a specific version tag"
-        log_error ""
-        exit 1
+    if [[ -n "$tag" ]]; then
+        helm_args+=(--set-string "$component.image.tag=$tag")
     fi
 }
+add_image_overrides gateway "${OPENSHELL_GATEWAY_IMAGE_REPOSITORY:-}" "${OPENSHELL_GATEWAY_IMAGE_TAG:-}"
+add_image_overrides supervisor "${OPENSHELL_SUPERVISOR_IMAGE_REPOSITORY:-}" "${OPENSHELL_SUPERVISOR_IMAGE_TAG:-}"
+add_image_overrides sandboxRuntime "${OPENSHELL_SANDBOX_RUNTIME_IMAGE_REPOSITORY:-}" "${OPENSHELL_SANDBOX_RUNTIME_IMAGE_TAG:-}"
+helm "${helm_args[@]}"
 
-# Create namespace and setup permissions
-setup_namespace() {
-    log_step "Setting up namespace..."
+oc create route passthrough openshell --service=openshell --port=8080 \
+    --hostname="$ROUTE_HOST" -n "$NAMESPACE" --dry-run=client -o yaml | oc apply -f -
 
-    # Create namespace
-    oc create namespace "${NAMESPACE}" --dry-run=client -o yaml | oc apply -f -
-    log_info "Namespace ${NAMESPACE} created/verified"
-
-    # Add SCC permissions for OpenShift
-    log_info "Adding SCC permissions for OpenShift..."
-
-    # Check if specified SCC exists
-    if oc get scc "${SCC_NAME}" &> /dev/null; then
-        log_info "Using SCC: ${SCC_NAME}"
-        oc adm policy add-scc-to-user "${SCC_NAME}" -z openshell-sandbox -n "${NAMESPACE}" 2>/dev/null || true
-    else
-        log_warn "SCC '${SCC_NAME}' not found, using privileged SCC"
-        log_warn "Set OPENSHELL_SCC environment variable to use a different SCC"
-        oc adm policy add-scc-to-user privileged -z openshell-sandbox -n "${NAMESPACE}" 2>/dev/null || true
-    fi
-
-    # Add SCC for certgen job
-    oc adm policy add-scc-to-user restricted-v2 -z openshell-certgen -n "${NAMESPACE}" 2>/dev/null || true
-}
-
-# Install OpenShell via Helm
-install_helm() {
-    log_step "Installing OpenShell via Helm..."
-
-    # Get the ingress domain
-    INGRESS_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null || true)
-    if [[ -z "${INGRESS_DOMAIN}" ]]; then
-        log_error "Could not detect OpenShift ingress domain"
-        exit 1
-    fi
-
-    ROUTE_HOSTNAME="openshell-${NAMESPACE}.${INGRESS_DOMAIN}"
-    log_info "Route hostname for certificate SANs: ${ROUTE_HOSTNAME}"
-
-    # Check if already installed
-    if helm list -n "${NAMESPACE}" | grep -q "^openshell"; then
-        log_info "OpenShell already installed, upgrading..."
-        helm upgrade openshell oci://ghcr.io/nvidia/openshell/helm-chart \
-            --version "${HELM_VERSION}" \
-            --namespace "${NAMESPACE}" \
-            --set image.repository="${GATEWAY_IMAGE_REPOSITORY}" \
-            --set image.tag="${GATEWAY_IMAGE_TAG}" \
-            --set supervisor.image.repository="${SUPERVISOR_IMAGE_REPOSITORY}" \
-            --set supervisor.image.tag="${SUPERVISOR_IMAGE_TAG}" \
-            --set podSecurityContext.fsGroup=null \
-            --set securityContext.runAsUser=null \
-            --set server.auth.allowUnauthenticatedUsers=true \
-            --set "pkiInitJob.serverDnsNames[0]=${ROUTE_HOSTNAME}"
-    else
-        log_info "Installing OpenShell ${HELM_VERSION}..."
-        helm install openshell oci://ghcr.io/nvidia/openshell/helm-chart \
-            --version "${HELM_VERSION}" \
-            --namespace "${NAMESPACE}" \
-            --set image.repository="${GATEWAY_IMAGE_REPOSITORY}" \
-            --set image.tag="${GATEWAY_IMAGE_TAG}" \
-            --set supervisor.image.repository="${SUPERVISOR_IMAGE_REPOSITORY}" \
-            --set supervisor.image.tag="${SUPERVISOR_IMAGE_TAG}" \
-            --set podSecurityContext.fsGroup=null \
-            --set securityContext.runAsUser=null \
-            --set server.auth.allowUnauthenticatedUsers=true \
-            --set "pkiInitJob.serverDnsNames[0]=${ROUTE_HOSTNAME}"
-    fi
-
-    log_info "OpenShell installed successfully"
-}
-
-# Wait for deployment
-wait_for_deployment() {
-    log_step "Waiting for OpenShell to be ready..."
-
-    oc -n "${NAMESPACE}" rollout status statefulset/openshell --timeout=300s
-
-    log_info "OpenShell is ready!"
-}
-
-# Create OpenShift route
-create_route() {
-    log_step "Creating OpenShift route..."
-
-    # Get route hostname
-    INGRESS_DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
-    ROUTE_HOST="openshell-${NAMESPACE}.${INGRESS_DOMAIN}"
-
-    # Check if route already exists
-    if oc get route openshell -n "${NAMESPACE}" &> /dev/null; then
-        log_info "Route already exists"
-        return 0
-    fi
-
-    # Create route pointing to port 8080 (Helm's default)
-    cat <<EOF | oc apply -f -
-apiVersion: route.openshift.io/v1
-kind: Route
-metadata:
-  name: openshell
-  namespace: ${NAMESPACE}
-spec:
-  to:
-    kind: Service
-    name: openshell
-  port:
-    targetPort: grpc
-  tls:
-    termination: passthrough
-EOF
-    log_info "Route created: ${ROUTE_HOST}"
-
-    # Wait a moment for route to propagate
-    sleep 2
-}
-
-# Setup CLI configuration
-setup_cli() {
-    log_step "Setting up CLI configuration..."
-
-    # Get route hostname
-    ROUTE_HOST=$(oc get route openshell -n "${NAMESPACE}" -o jsonpath='{.spec.host}' 2>/dev/null || true)
-    if [[ -z "${ROUTE_HOST}" ]]; then
-        log_error "Could not get route hostname"
-        exit 1
-    fi
-
-    GATEWAY_URL="https://${ROUTE_HOST}"
-    log_info "Gateway URL: ${GATEWAY_URL}"
-
-    # Remove existing gateway if present
-    openshell gateway remove "${GATEWAY_NAME}" 2>/dev/null || true
-
-    # Add gateway
-    log_info "Adding gateway to CLI..."
-    openshell gateway add "${GATEWAY_URL}" --local --name "${GATEWAY_NAME}"
-
-    # Extract TLS certificates from Kubernetes secrets
-    log_info "Extracting TLS certificates..."
-    CLI_CONFIG_DIR="${HOME}/.config/openshell/gateways/${GATEWAY_NAME}"
-    MTLS_DIR="${CLI_CONFIG_DIR}/mtls"
-
-    mkdir -p "${MTLS_DIR}"
-
-    local old_umask=$(umask)
+extract_tls() {
     umask 077
-
-    oc -n "${NAMESPACE}" get secret openshell-client-tls \
-        -o jsonpath='{.data.ca\.crt}' | base64 -d > "${MTLS_DIR}/ca.crt"
-
-    oc -n "${NAMESPACE}" get secret openshell-client-tls \
-        -o jsonpath='{.data.tls\.crt}' | base64 -d > "${MTLS_DIR}/tls.crt"
-
-    oc -n "${NAMESPACE}" get secret openshell-client-tls \
-        -o jsonpath='{.data.tls\.key}' | base64 -d > "${MTLS_DIR}/tls.key"
-
-    umask "${old_umask}"
-
-    chmod 600 "${MTLS_DIR}/tls.key"
-
-    log_info "CLI configured successfully"
+    mkdir -p "$CONFIG_DIR/mtls"
+    chmod 700 "$CONFIG_DIR" "$CONFIG_DIR/mtls"
+    oc get secret openshell-client-tls -n "$NAMESPACE" -o jsonpath='{.data.ca\.crt}' | base64 -d > "$CONFIG_DIR/mtls/ca.crt"
+    oc get secret openshell-client-tls -n "$NAMESPACE" -o jsonpath='{.data.tls\.crt}' | base64 -d > "$CONFIG_DIR/mtls/tls.crt"
+    oc get secret openshell-client-tls -n "$NAMESPACE" -o jsonpath='{.data.tls\.key}' | base64 -d > "$CONFIG_DIR/mtls/tls.key"
+    chmod 600 "$CONFIG_DIR/mtls/ca.crt" "$CONFIG_DIR/mtls/tls.crt" "$CONFIG_DIR/mtls/tls.key"
 }
-
-# Display usage information
-display_info() {
-    log_step "Deployment complete!"
-    echo ""
-    log_info "Gateway: ${GATEWAY_NAME}"
-    log_info "Version: ${HELM_VERSION}"
-    log_info "Gateway image: ${GATEWAY_IMAGE_REPOSITORY}:${GATEWAY_IMAGE_TAG}"
-    log_info "Supervisor image: ${SUPERVISOR_IMAGE_REPOSITORY}:${SUPERVISOR_IMAGE_TAG}"
-    echo ""
-    log_info "Check status:"
-    echo "  openshell status"
-    echo ""
-    log_info "Create a sandbox:"
-    echo "  openshell sandbox create --name test"
-    echo ""
-    log_info "List sandboxes:"
-    echo "  openshell sandbox list"
-    echo ""
-
-    # Show current SCC in use
-    local current_scc="unknown"
-    if oc get scc openshell-sandbox-minimum-required &> /dev/null; then
-        current_scc="openshell-sandbox-minimum-required (custom)"
-    else
-        current_scc="privileged (default)"
+# Registration may import a package-managed bundle; restore this cluster's bundle afterward.
+extract_tls
+openshell gateway add "https://${ROUTE_HOST}" --local --name "$GATEWAY_NAME"
+extract_tls
+printf '%s\n' "$NAMESPACE_UID" > "$CONFIG_DIR/agent-ops-namespace-uid"
+for attempt in {1..15}; do
+    if status=$(openshell status --gateway "$GATEWAY_NAME" 2>&1) && [[ "$status" == *Connected* ]]; then
+        printf '%s\n' "$status"
+        printf 'OpenShell is ready. Use gateway %s and namespace %s.\n' "$GATEWAY_NAME" "$NAMESPACE"
+        exit 0
     fi
-    log_warn "Current SCC: ${current_scc}"
-    echo ""
-}
-
-# Main deployment flow
-main() {
-    echo "=========================================="
-    echo "  OpenShell v${HELM_VERSION} Deployment"
-    echo "  OpenShift / Red Hat ODH"
-    echo "=========================================="
-    echo ""
-
-    check_prerequisites
-    check_agent_sandbox
-    setup_namespace
-    install_helm
-    wait_for_deployment
-    create_route
-    setup_cli
-    display_info
-}
-
-main "$@"
+    sleep 2
+done
+printf '%s\n' "$status" >&2
+fail 'Gateway did not become Connected. Inspect the Route and TLS configuration.'

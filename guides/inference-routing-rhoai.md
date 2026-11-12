@@ -1,6 +1,10 @@
-# Inference Routing with RHOAI via OpenShell
+# Use an RHOAI model from an OpenShell sandbox
 
-Route sandbox inference traffic through a token-authenticated Red Hat OpenShift AI (RHOAI)-served model using the OpenShell privacy router, without exposing credentials to the sandbox. Complete the following steps to configure the routing.
+Call a token-authenticated Red Hat OpenShift AI (RHOAI) model using its native
+OpenAI-compatible API. With OpenShell `0.1.7` and ODH runtime
+`v0.1.7-rhaiv.0`, a provider profile defines the allowed endpoint, client binaries
+and credential injection. The client calls the real model URL; the supervisor
+injects the token without exposing its value to the sandbox.
 
 ## Prerequisites
 
@@ -8,141 +12,205 @@ Route sandbox inference traffic through a token-authenticated Red Hat OpenShift 
 - A model is deployed via RHOAI model serving, with the `InferenceService` in the `Ready` state. For deployment, see [Deploying models](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.5/html/deploying_models/deploying_models) or [Enabling the model serving platform](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.5/html/configuring_your_model-serving_platform/configuring_model_servers#enabling-the-model-serving-platform_rhoai-admin).
   - Authentication is enabled on the model (`security.opendatahub.io/enable-auth: "true"`).
   - An OpenShift `Route` is created for the model.
-- The OpenShell gateway is deployed on the cluster and connected locally (`openshell status` shows `Connected`).
+  - The model uses a vLLM backend exposing the OpenAI-compatible `/v1/models` and `/v1/chat/completions` APIs.
+- Complete the [getting-started guide](getting-started-openshell-openshift.md) with upstream CLI/chart `0.1.7` and ODH runtime `v0.1.7-rhaiv.0`. The gateway is connected locally (`openshell status` shows `Connected`).
 - The OpenShift CLI (`oc`) is installed and authenticated to the cluster.
-- The `openshell` CLI is installed.
+- A dedicated ServiceAccount in the model namespace is authorized by the model administrator to call this model endpoint. Its role bindings depend on the serving platform's authorization configuration; grant only model invocation access. You can mint short-lived tokens for that account.
+- Bring a workload image containing `curl`, Python 3, a shell and `sleep` with `infinity` support, accessible to the cluster. Python is used only for the denied-client check. The default NVIDIA Ubuntu workload image does not include these clients.
+
+Run commands locally from a checkout of this repository. The examples assume
+`rhoai`, `rhoai-openai` and `inference-demo` are unused names in your workspace.
 
 ## 1. Gather the model endpoint and a token
 
 Gather the model namespace, name, and route, then export an authentication token:
 
-```bash
-NAMESPACE=<your-model-namespace>
-MODEL_NAME=<your-model-name>
+```shell
+NAMESPACE='<your-model-namespace>'
+MODEL_NAME='<your-model-name>'
 MODEL_ROUTE=$(oc get route "$MODEL_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.host}')
-export OPENAI_API_KEY=$(oc whoami -t)
+MODEL_SERVICE_ACCOUNT='<authorized-model-client-serviceaccount>'
+export OPENAI_API_KEY=$(oc create token "$MODEL_SERVICE_ACCOUNT" -n "$NAMESPACE" --duration=1h)
 ```
 
 Verify that the model requires authentication:
 
-```bash
-curl -s https://$MODEL_ROUTE/v1/models
-# Unauthorized
+```shell
+curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' \
+  "https://${MODEL_ROUTE}/v1/models"
+# 401
 ```
 
-> OpenShift access tokens expire after 24 hours by default.
-> To refresh the token stored in the provider when it expires, run the following command:
-> ```bash
-> openshell provider update rhoai --credential OPENAI_API_KEY
-> ```
->
-> For production use, create a dedicated ServiceAccount with the minimum permissions needed to call the model route, and use its token instead of `oc whoami -t`. Personal OAuth tokens are short-lived and tied to your user session.
+Resolve any local TLS errors before interpreting the HTTP status. If the Route
+uses a private CA, add `--cacert /path/to/model-route-ca.crt` to the local curl
+command. Do not disable TLS verification.
 
-## 2. Register the RHOAI model as an OpenShell provider
+The token request is bounded to one hour; the cluster controls its actual
+lifetime. Refresh it before expiry.
 
-Register the model as a provider, passing the credential key name only. OpenShell reads the value from the environment, so the token is not exposed in process arguments:
+The Route certificate must be trusted by the supervisor. If the Route uses a
+private CA, configure that trust before continuing. Chart `0.1.7` supports
+`supervisor.network.additionalCaConfigMapName`, referencing a ConfigMap in the
+gateway namespace with the CA certificates in its `ca.crt` key. Configure it
+before creating the sandbox. Disabling verification in a local client does not
+configure the supervisor's upstream trust.
 
-```bash
+## 2. Import a profile and register the provider
+
+Copy the [RHOAI profile example](../examples/rhoai/openai-compatible.yaml) and
+substitute the Route hostname:
+
+```shell
+PROFILE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/rhoai-profile.XXXXXX")
+PROFILE_FILE="$PROFILE_DIR/profile.yaml"
+sed "s/model.example.com/${MODEL_ROUTE}/" \
+  examples/rhoai/openai-compatible.yaml > "$PROFILE_FILE"
+```
+
+The profile permits `/usr/bin/curl` to reach this host on port 443 and injects
+`OPENAI_API_KEY` as a bearer token. Set `binaries` to the canonical path of curl
+in your workload image (resolve symlinks with `readlink -f`). If an application
+uses an SDK, allow its actual executable or interpreter instead. Do not add the
+Python interpreter used for the denied-client check below.
+
+Import the profile before creating the provider:
+
+```shell
+openshell profile lint -f "$PROFILE_FILE"
+openshell profile import -f "$PROFILE_FILE"
 openshell provider create \
   --name rhoai \
-  --type openai \
-  --credential OPENAI_API_KEY \
-  --config "OPENAI_BASE_URL=https://${MODEL_ROUTE}/v1"
+  --type rhoai-openai \
+  --credential OPENAI_API_KEY
+unset OPENAI_API_KEY
 ```
 
-The gateway stores the token and never exposes it to sandboxes.
+Only the credential key name appears in the command arguments. The CLI reads its
+value from the local environment and stores it at the gateway. The sandbox
+receives a placeholder that the supervisor resolves on allowed requests.
 
-## 3. Configure inference routing
+To refresh an expired token, export a new value locally and update the provider:
 
-Set the provider and model for inference routing:
-
-```bash
-openshell inference set \
-  --provider rhoai \
-  --model "$MODEL_NAME" \
-  --no-verify
+```shell
+export OPENAI_API_KEY=$(oc create token "$MODEL_SERVICE_ACCOUNT" -n "$NAMESPACE" --duration=1h)
+openshell provider update rhoai --credential OPENAI_API_KEY --wait
+unset OPENAI_API_KEY
 ```
 
-> `--no-verify` disables TLS verification between the OpenShell gateway and the RHOAI model route. This is required when the gateway pod does not yet trust the OpenShift service CA. For production deployments, mount the OpenShift service CA bundle into the gateway pod and omit this flag. See the [OpenShift service CA documentation](https://docs.redhat.com/en/documentation/openshift_container_platform/latest/html/security_and_compliance/certificate-types-and-descriptions#service-ca-certificates_ocp-certificates) for details.
+Wait for the update to be applied. Restart long-running SDK or agent processes
+afterward so they receive the new placeholder; each new `sandbox exec` starts a
+fresh process.
 
-Confirm the routing configuration:
+## 3. Create a sandbox
 
-```bash
-openshell inference get
-# Route:    inference.local
-# Provider: rhoai
-# Model:    <your-model-name>
-```
+Set your workload image and attach the provider. `OPENAI_BASE_URL` is the native
+model endpoint:
 
-## 4. Create a sandbox
-
-Create a sandbox that routes inference through the provider:
-
-```bash
+```shell
+WORKLOAD_IMAGE='<your-registry/your-workload-image:tag>'
 openshell sandbox create \
   --name inference-demo \
+  --from "$WORKLOAD_IMAGE" \
   --provider rhoai \
-  --env OPENAI_BASE_URL=https://inference.local/v1 \
-  -- sleep 300
+  --policy examples/policies/deny-network.yaml \
+  --env "OPENAI_BASE_URL=https://${MODEL_ROUTE}/v1" \
+  --detach -- sleep infinity
 ```
 
-The `--env OPENAI_BASE_URL` override routes all OpenAI SDK calls through the privacy router rather than directly to the model route.
+The explicit base policy has no network grants; the provider adds only model
+listing and chat completion access. Inspect the effective policy:
+
+```shell
+openshell policy get inference-demo --base
+openshell policy get inference-demo --full
+```
+
+Confirm there are no additional network rules from a gateway-global policy.
+
+## 4. Discover the served model ID
+
+First verify that the sandbox received a placeholder, without printing it:
+
+```shell
+openshell sandbox exec inference-demo -- sh -c '
+  case "$OPENAI_API_KEY" in
+    openshell:resolve:*) echo placeholder ;;
+    *) echo "Expected a credential placeholder" >&2; exit 1 ;;
+  esac
+'
+```
+
+Expect `placeholder`. Then list the models from inside the sandbox:
+
+```shell
+openshell sandbox exec inference-demo -- sh -c '
+  curl --fail --show-error --silent --max-time 30 \
+    "${OPENAI_BASE_URL}/models" \
+    -H "Authorization: Bearer ${OPENAI_API_KEY}"
+'
+```
+
+Use the `id` returned in `data` as `MODEL_ID`. The served model ID can differ from
+the Kubernetes resource name. Every chat request must include it explicitly.
 
 ## 5. Test the flow
 
-### Inference through `inference.local` succeeds
+### An allowed client receives a model response
 
-Send an inference request through the privacy router:
+Replace `<served-model-id>` with the ID discovered above:
 
-```bash
-openshell sandbox exec -n inference-demo -- \
-  curl -sf https://inference.local/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "messages": [{"role": "user", "content": "Hello"}],
-    "max_tokens": 100
-  }'
+```shell
+openshell sandbox exec inference-demo -- sh -c '
+  MODEL_ID="<served-model-id>"
+  curl --fail --show-error --silent --max-time 120 \
+    "${OPENAI_BASE_URL}/chat/completions" \
+    -H "Authorization: Bearer ${OPENAI_API_KEY}" \
+    -H "Content-Type: application/json" \
+    -d "{\"model\":\"${MODEL_ID}\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"max_tokens\":100}"
+'
 ```
 
-The privacy router intercepts the request, strips any sandbox-supplied credentials, injects the real RHOAI token, and forwards the request to the model route. The sandbox receives the model response without ever holding the token.
+Expect an OpenAI-compatible JSON response containing `choices`. The real token
+is injected by the supervisor; the authorization header above contains only the
+sandbox's placeholder.
 
-### Direct route access is blocked
+### An unapproved binary is blocked
 
-Attempt to reach the model route directly from the sandbox:
+Try the same host with Python, which is absent from the profile's `binaries`:
 
-```bash
-openshell sandbox exec -n inference-demo -- \
-  curl --max-time 5 https://$MODEL_ROUTE/v1/models
-# curl: (56) CONNECT tunnel failed, response 403
+```shell
+openshell sandbox exec inference-demo -- python3 -c '
+import os
+import urllib.request
+urllib.request.urlopen(os.environ["OPENAI_BASE_URL"] + "/models", timeout=10)
+'
 ```
 
-Exit code 56 with a proxy 403 confirms a network policy denial, not an authentication failure against a reachable endpoint.
+Expect a connection or permission error. Confirm a policy denial for the Python
+binary in the audit logs below; an HTTP 401 alone would only establish missing
+credentials at a reachable endpoint. An allowed curl request to the native Route
+is expected to succeed.
 
 ## 6. Observe OCSF audit events
 
-The OpenShell supervisor emits structured OCSF `HttpActivity` events for every network action.
+Inspect supervisor audit events:
 
-View the sandbox-side events to see what the sandbox attempted:
-
-```bash
-openshell logs inference-demo --source sandbox | grep "NET:"
-# NET:OPEN ALLOWED inference.local:443
+```shell
+openshell logs inference-demo --source sandbox -n 300
 ```
 
-View the gateway-side events to see the actual upstream destination, with credentials stripped:
-
-```bash
-openshell logs inference-demo --source gateway | grep "openshell_router"
-# [openshell_router] routing proxy inference request endpoint=https://...
-```
-
-Sandbox inference requests pass through the privacy router and appear in OCSF audit logs; the real model endpoint and token remain hidden from the sandbox.
+Look for allowed curl activity and denied Python activity for your model Route,
+including the executable identity and destination. The native endpoint is visible
+to the client and in audit logs; the token value stays outside the sandbox.
 
 ## Cleanup
 
-Delete the sandbox and provider when you are finished:
+Delete the sandbox, provider and custom profile when finished:
 
-```bash
+```shell
 openshell sandbox delete inference-demo
 openshell provider delete rhoai
+openshell profile delete rhoai-openai
+rm "$PROFILE_FILE"
+rmdir "$PROFILE_DIR"
 ```
