@@ -15,7 +15,8 @@ injects the token without exposing its value to the sandbox.
   - The model uses a vLLM backend exposing the OpenAI-compatible `/v1/models` and `/v1/chat/completions` APIs.
 - Complete the [getting-started guide](getting-started-openshell-openshift.md) with upstream CLI/chart `0.1.7` and ODH runtime `v0.1.7-rhaiv.0`. The gateway is connected locally (`openshell status` shows `Connected`).
 - The OpenShift CLI (`oc`) is installed and authenticated to the cluster.
-- Bring a workload image containing `curl`, Python 3 and a shell, accessible to the cluster. Python is used only for the denied-client check. The default NVIDIA Ubuntu workload image does not include these clients.
+- A dedicated ServiceAccount in the model namespace is authorized by the model administrator to call this model endpoint. Its role bindings depend on the serving platform's authorization configuration; grant only model invocation access. You can mint short-lived tokens for that account.
+- Bring a workload image containing `curl`, Python 3, a shell and `sleep` with `infinity` support, accessible to the cluster. Python is used only for the denied-client check. The default NVIDIA Ubuntu workload image does not include these clients.
 
 Run commands locally from a checkout of this repository. The examples assume
 `rhoai`, `rhoai-openai` and `inference-demo` are unused names in your workspace.
@@ -28,19 +29,24 @@ Gather the model namespace, name, and route, then export an authentication token
 NAMESPACE='<your-model-namespace>'
 MODEL_NAME='<your-model-name>'
 MODEL_ROUTE=$(oc get route "$MODEL_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.host}')
-export OPENAI_API_KEY=$(oc whoami -t)
+MODEL_SERVICE_ACCOUNT='<authorized-model-client-serviceaccount>'
+export OPENAI_API_KEY=$(oc create token "$MODEL_SERVICE_ACCOUNT" -n "$NAMESPACE" --duration=1h)
 ```
 
 Verify that the model requires authentication:
 
 ```shell
-curl -s "https://${MODEL_ROUTE}/v1/models"
-# Unauthorized
+curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' \
+  "https://${MODEL_ROUTE}/v1/models"
+# 401
 ```
 
-OpenShift access tokens expire according to cluster configuration. For production
-use, create a dedicated ServiceAccount with the minimum permissions needed to
-call the model route, and use its token instead of `oc whoami -t`.
+Resolve any local TLS errors before interpreting the HTTP status. If the Route
+uses a private CA, add `--cacert /path/to/model-route-ca.crt` to the local curl
+command. Do not disable TLS verification.
+
+The token request is bounded to one hour; the cluster controls its actual
+lifetime. Refresh it before expiry.
 
 The Route certificate must be trusted by the supervisor. If the Route uses a
 private CA, configure that trust before continuing. Chart `0.1.7` supports
@@ -55,8 +61,10 @@ Copy the [RHOAI profile example](../examples/rhoai/openai-compatible.yaml) and
 substitute the Route hostname:
 
 ```shell
+PROFILE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/rhoai-profile.XXXXXX")
+PROFILE_FILE="$PROFILE_DIR/profile.yaml"
 sed "s/model.example.com/${MODEL_ROUTE}/" \
-  examples/rhoai/openai-compatible.yaml > /tmp/rhoai-profile.yaml
+  examples/rhoai/openai-compatible.yaml > "$PROFILE_FILE"
 ```
 
 The profile permits `/usr/bin/curl` to reach this host on port 443 and injects
@@ -68,8 +76,8 @@ Python interpreter used for the denied-client check below.
 Import the profile before creating the provider:
 
 ```shell
-openshell profile lint -f /tmp/rhoai-profile.yaml
-openshell profile import -f /tmp/rhoai-profile.yaml
+openshell profile lint -f "$PROFILE_FILE"
+openshell profile import -f "$PROFILE_FILE"
 openshell provider create \
   --name rhoai \
   --type rhoai-openai \
@@ -84,10 +92,14 @@ receives a placeholder that the supervisor resolves on allowed requests.
 To refresh an expired token, export a new value locally and update the provider:
 
 ```shell
-export OPENAI_API_KEY=$(oc whoami -t)
-openshell provider update rhoai --credential OPENAI_API_KEY
+export OPENAI_API_KEY=$(oc create token "$MODEL_SERVICE_ACCOUNT" -n "$NAMESPACE" --duration=1h)
+openshell provider update rhoai --credential OPENAI_API_KEY --wait
 unset OPENAI_API_KEY
 ```
+
+Wait for the update to be applied. Restart long-running SDK or agent processes
+afterward so they receive the new placeholder; each new `sandbox exec` starts a
+fresh process.
 
 ## 3. Create a sandbox
 
@@ -100,15 +112,35 @@ openshell sandbox create \
   --name inference-demo \
   --from "$WORKLOAD_IMAGE" \
   --provider rhoai \
+  --policy examples/policies/deny-network.yaml \
   --env "OPENAI_BASE_URL=https://${MODEL_ROUTE}/v1" \
   --detach -- sleep infinity
 ```
 
-The provider profile supplies endpoint policy and credential injection.
+The explicit base policy has no network grants; the provider adds only model
+listing and chat completion access. Inspect the effective policy:
+
+```shell
+openshell policy get inference-demo --base
+openshell policy get inference-demo --full
+```
+
+Confirm there are no additional network rules from a gateway-global policy.
 
 ## 4. Discover the served model ID
 
-List the models from inside the sandbox:
+First verify that the sandbox received a placeholder, without printing it:
+
+```shell
+openshell sandbox exec inference-demo -- sh -c '
+  case "$OPENAI_API_KEY" in
+    openshell:resolve:*) echo placeholder ;;
+    *) echo "Expected a credential placeholder" >&2; exit 1 ;;
+  esac
+'
+```
+
+Expect `placeholder`. Then list the models from inside the sandbox:
 
 ```shell
 openshell sandbox exec inference-demo -- sh -c '
@@ -179,5 +211,6 @@ Delete the sandbox, provider and custom profile when finished:
 openshell sandbox delete inference-demo
 openshell provider delete rhoai
 openshell profile delete rhoai-openai
-rm /tmp/rhoai-profile.yaml
+rm "$PROFILE_FILE"
+rmdir "$PROFILE_DIR"
 ```
