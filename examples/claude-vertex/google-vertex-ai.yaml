@@ -3,12 +3,13 @@
 # Based on OpenShell v0.1.7-rhaiv.0 (dea15169db64d3eb37aa90458a2fd79bf843ba59).
 # Import explicitly. Edit binaries to match the canonical Claude executable
 # path in your own workload image; this example assumes /usr/local/bin/claude.
+# Use a native executable, not a shared Node.js interpreter.
 # ADC refresh material stays at the gateway; Claude sends only the access-token
 # placeholder in its Authorization header to the declared Vertex endpoints.
 
 id: google-vertex-ai
 display_name: Google Vertex AI
-description: Google Vertex AI inference provider (Anthropic Claude, Gemini, and third-party models)
+description: Anthropic Claude inference on Google Vertex AI
 category: inference
 inference_capable: true
 credentials:
@@ -68,22 +69,30 @@ endpoints:
   - host: "*-aiplatform.googleapis.com"
     port: 443
     protocol: rest
-    access: read-write
+    rules:
+      - allow: {method: POST, path: "/v1/projects/*/locations/*/publishers/anthropic/models/*:rawPredict"}
+      - allow: {method: POST, path: "/v1/projects/*/locations/*/publishers/anthropic/models/*:streamRawPredict"}
     enforcement: enforce
   - host: "aiplatform.googleapis.com"
     port: 443
     protocol: rest
-    access: read-write
+    rules:
+      - allow: {method: POST, path: "/v1/projects/*/locations/*/publishers/anthropic/models/*:rawPredict"}
+      - allow: {method: POST, path: "/v1/projects/*/locations/*/publishers/anthropic/models/*:streamRawPredict"}
     enforcement: enforce
   - host: "aiplatform.us.rep.googleapis.com"
     port: 443
     protocol: rest
-    access: read-write
+    rules:
+      - allow: {method: POST, path: "/v1/projects/*/locations/*/publishers/anthropic/models/*:rawPredict"}
+      - allow: {method: POST, path: "/v1/projects/*/locations/*/publishers/anthropic/models/*:streamRawPredict"}
     enforcement: enforce
   - host: "aiplatform.eu.rep.googleapis.com"
     port: 443
     protocol: rest
-    access: read-write
+    rules:
+      - allow: {method: POST, path: "/v1/projects/*/locations/*/publishers/anthropic/models/*:rawPredict"}
+      - allow: {method: POST, path: "/v1/projects/*/locations/*/publishers/anthropic/models/*:streamRawPredict"}
     enforcement: enforce
 
 binaries: [/usr/local/bin/claude]

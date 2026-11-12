@@ -1,3 +1,6 @@
+# Legacy helper for OpenShell 0.0.116 with supervisor.topology=sidecar.
+# OpenShell 0.1.7 uses a separate supervisor pod and does not need this patch.
+# This DaemonSet modifies the host initramfs with privileged host filesystem access.
 # One-shot DaemonSet that patches the Kata initramfs to include
 # nf_tables kernel modules required by OpenShell's sidecar topology
 # network init container. Only needed with the `kata` runtime;

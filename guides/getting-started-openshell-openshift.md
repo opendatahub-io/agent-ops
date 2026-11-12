@@ -19,6 +19,7 @@ names throughout if you already have an installation.
 - You have cluster administrator permissions.
 - You have installed the OpenShift CLI (`oc`) locally.
 - You have Helm installed locally.
+- Podman is installed and can run a container for workload image inspection.
 - The Red Hat build of Agent Sandbox v0.9.0 is installed on the cluster via the Software Catalog.
 - You have obtained credentials for a supported inference provider. This guide uses an Anthropic Claude model served through Google Vertex AI as the example. OpenShell also supports other provider types; configuration requirements differ by provider. See [Provider profiles](https://docs.nvidia.com/openshell/latest/how-it-works/providers/profiles) for the access and credential contract.
 - The Google Cloud CLI (`gcloud`) is installed and authenticated with Application Default Credentials (`gcloud auth application-default login`). Only required when using the Vertex AI example provider.
@@ -37,7 +38,30 @@ names throughout if you already have an installation.
 ## Install the OpenShell CLI
 
 Run the repository's installer script. It downloads the upstream installer from
-an immutable commit, verifies its SHA-256 checksum, and installs CLI `v0.1.7`:
+an immutable commit, verifies its SHA-256 checksum, and installs CLI `v0.1.7`.
+
+The upstream installer also starts or restarts a local gateway. It can replace
+an existing `openshell` registration and remove the `local` registration,
+including their stored tokens. Active local sessions can be interrupted. If you
+already use OpenShell, back up its CLI configuration before installing:
+
+```shell
+CLI_BACKUP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/openshell-cli-backup.XXXXXX")
+CLI_CONFIG_ROOT="${XDG_CONFIG_HOME:-$HOME/.config}/openshell"
+if [ -d "$CLI_CONFIG_ROOT" ]; then
+  cp -Rp "$CLI_CONFIG_ROOT" "$CLI_BACKUP_DIR/openshell"
+fi
+printf 'Protected CLI backup: %s\n' "$CLI_BACKUP_DIR"
+```
+
+Keep this private backup until you have verified your registrations after the
+installation. To recover a missing remote registration, restore its directory
+from `$CLI_BACKUP_DIR/openshell/gateways/` into `$CLI_CONFIG_ROOT/gateways/`.
+Re-register the package-managed local gateway using its current TLS bundle.
+If using the snap package, also back up its CLI configuration under
+`~/snap/openshell/common/.config/openshell` before refreshing it.
+
+Install the CLI:
 
 ```shell
 ./scripts/install-openshell-cli.sh
@@ -51,7 +75,8 @@ Expect `openshell 0.1.7`.
 Create a dedicated namespace for OpenShell:
 
 ```shell
-oc create ns openshell
+OPENSHELL_NAMESPACE=openshell
+oc create ns "$OPENSHELL_NAMESPACE"
 ```
 
 ## Determine the route hostname
@@ -60,7 +85,7 @@ Determine the `Route` hostname from the cluster's apps domain. This variable is 
 
 ```shell
 DOMAIN=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
-ROUTE_HOST="openshell-openshell.${DOMAIN}"
+ROUTE_HOST="openshell-${OPENSHELL_NAMESPACE}.${DOMAIN}"
 echo "$ROUTE_HOST"
 ```
 
@@ -71,14 +96,10 @@ build `v0.1.7-rhaiv.0`.
 See the [release chart README](https://github.com/NVIDIA/OpenShell/blob/5d25211b25a8fc887e8d5c606d57d6ab22f1d76c/deploy/helm/openshell/README.md)
 for the chart's configuration surface.
 
-Both Helm commands below explicitly select the ODH gateway, supervisor and
-trusted sandbox runtime images from `quay.io/opendatahub`, using the shared
-release tag `v0.1.7-rhaiv.0`. The OpenShift security settings let `restricted-v2`
-assign the gateway's UID/GID, and unauthenticated user access stays disabled.
-
-```shell
-ODH_IMAGE_TAG=v0.1.7-rhaiv.0
-```
+Both installation options load the [shared OpenShift values](../examples/openshift/values-odh.yaml).
+The file selects the ODH gateway, supervisor and trusted sandbox runtime images
+from `quay.io/opendatahub`, using tag `v0.1.7-rhaiv.0`. It also configures the
+OpenShift security contexts and disables unauthenticated user access.
 
 The sandbox runtime supplies OpenShell's workload boundary. Select the
 application image containing Claude Code in the workload setup below.
@@ -96,19 +117,8 @@ SQLite stores data in a file on a per-pod `PVC` and runs the gateway as a `State
 ```shell
 helm install openshell oci://ghcr.io/nvidia/openshell/helm-chart \
   --version 0.1.7 \
-  --namespace openshell \
-  --set gateway.image.registry=quay.io \
-  --set gateway.image.repository=opendatahub/odh-openshell-gateway \
-  --set gateway.image.tag="${ODH_IMAGE_TAG}" \
-  --set supervisor.image.registry=quay.io \
-  --set supervisor.image.repository=opendatahub/odh-openshell-supervisor \
-  --set supervisor.image.tag="${ODH_IMAGE_TAG}" \
-  --set sandboxRuntime.image.registry=quay.io \
-  --set sandboxRuntime.image.repository=opendatahub/odh-openshell-sandbox \
-  --set sandboxRuntime.image.tag="${ODH_IMAGE_TAG}" \
-  --set podSecurityContext=null \
-  --set securityContext.runAsUser=null \
-  --set server.auth.allowUnauthenticatedUsers=false \
+  --namespace "$OPENSHELL_NAMESPACE" \
+  -f examples/openshift/values-odh.yaml \
   --set "pkiInitJob.serverDnsNames[0]=${ROUTE_HOST}" \
   --wait --timeout 5m
 ```
@@ -117,11 +127,12 @@ helm install openshell oci://ghcr.io/nvidia/openshell/helm-chart \
 
 Use external PostgreSQL database when you need multi-replica gateways or a database managed outside this chart. The OpenShell Helm chart does not deploy a database; it is recommended to deploy a PostgreSQL instance separately with your own configuration.
 
-To test OpenShell with PostgreSQL for **testing purposes**, apply the following manifest. It creates a `Secret` with the database credentials and connection URI, a `PVC` for data persistence, a single-replica PostgreSQL `Deployment`, and a `Service` in the `openshell` namespace:
+To test OpenShell with PostgreSQL for **testing purposes**, apply the following manifest. It creates a `Secret` with the database credentials and connection URI, a `PVC` for data persistence, a single-replica PostgreSQL `Deployment`, and a `Service` in the selected OpenShell namespace:
 
 ```shell
-oc apply -f common/postgresql.yaml
-oc rollout status deployment/postgresql -n openshell --timeout=180s
+sed "s/namespace: openshell/namespace: ${OPENSHELL_NAMESPACE}/g" \
+  common/postgresql.yaml | oc apply -f -
+oc rollout status deployment/postgresql -n "$OPENSHELL_NAMESPACE" --timeout=180s
 ```
 
 The manifest creates a `postgresql-credentials` `Secret` that includes a `uri` key OpenShell can read directly.
@@ -129,7 +140,7 @@ The manifest creates a `postgresql-credentials` `Secret` that includes a `uri` k
 If you are connecting to your own PostgreSQL instance, create a `Secret` with a `uri` key containing your connection string:
 
 ```shell
-oc create secret generic postgresql-credentials -n openshell \
+oc create secret generic postgresql-credentials -n "$OPENSHELL_NAMESPACE" \
   --from-literal=uri="postgresql://user:pass@host:5432/dbname"
 ```
 
@@ -138,19 +149,8 @@ Install the OpenShell Helm chart pointing at the `Secret`:
 ```shell
 helm install openshell oci://ghcr.io/nvidia/openshell/helm-chart \
   --version 0.1.7 \
-  --namespace openshell \
-  --set gateway.image.registry=quay.io \
-  --set gateway.image.repository=opendatahub/odh-openshell-gateway \
-  --set gateway.image.tag="${ODH_IMAGE_TAG}" \
-  --set supervisor.image.registry=quay.io \
-  --set supervisor.image.repository=opendatahub/odh-openshell-supervisor \
-  --set supervisor.image.tag="${ODH_IMAGE_TAG}" \
-  --set sandboxRuntime.image.registry=quay.io \
-  --set sandboxRuntime.image.repository=opendatahub/odh-openshell-sandbox \
-  --set sandboxRuntime.image.tag="${ODH_IMAGE_TAG}" \
-  --set podSecurityContext=null \
-  --set securityContext.runAsUser=null \
-  --set server.auth.allowUnauthenticatedUsers=false \
+  --namespace "$OPENSHELL_NAMESPACE" \
+  -f examples/openshift/values-odh.yaml \
   --set workload.kind=deployment \
   --set server.externalDbSecret=postgresql-credentials \
   --set "pkiInitJob.serverDnsNames[0]=${ROUTE_HOST}" \
@@ -164,7 +164,7 @@ helm install openshell oci://ghcr.io/nvidia/openshell/helm-chart \
 For either option, the `pkiInitJob.serverDnsNames` value adds the `Route` hostname to the TLS certificate's Subject Alternative Names (SANs). Without it, the CLI rejects the connection because the certificate is not valid for the external hostname.
 
 ```shell
-oc get pods -n openshell
+oc get pods -n "$OPENSHELL_NAMESPACE"
 ```
 
 Verify the gateway pod is Ready before continuing. If it is Pending or reports an error, inspect pod events, storage provisioning and SCC admission before changing permissions.
@@ -180,7 +180,7 @@ oc create route passthrough openshell \
   --service=openshell \
   --port=8080 \
   --hostname="${ROUTE_HOST}" \
-  -n openshell
+  -n "$OPENSHELL_NAMESPACE"
 ```
 
 ## Connect the OpenShell CLI
@@ -201,19 +201,20 @@ The OpenShell Helm chart automatically generates an mTLS certificate bundle duri
 
 ```shell
 umask 077
-mkdir -p ~/.config/openshell/gateways/openshift/mtls
+MTLS_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/openshell/gateways/openshift/mtls"
+mkdir -p "$MTLS_DIR"
 
-oc -n openshell get secret openshell-client-tls \
-  -o jsonpath='{.data.ca\.crt}'  | base64 -d > ~/.config/openshell/gateways/openshift/mtls/ca.crt
+oc -n "$OPENSHELL_NAMESPACE" get secret openshell-client-tls \
+  -o jsonpath='{.data.ca\.crt}'  | base64 -d > "$MTLS_DIR/ca.crt"
 
-oc -n openshell get secret openshell-client-tls \
-  -o jsonpath='{.data.tls\.crt}' | base64 -d > ~/.config/openshell/gateways/openshift/mtls/tls.crt
+oc -n "$OPENSHELL_NAMESPACE" get secret openshell-client-tls \
+  -o jsonpath='{.data.tls\.crt}' | base64 -d > "$MTLS_DIR/tls.crt"
 
-oc -n openshell get secret openshell-client-tls \
-  -o jsonpath='{.data.tls\.key}' | base64 -d > ~/.config/openshell/gateways/openshift/mtls/tls.key
+oc -n "$OPENSHELL_NAMESPACE" get secret openshell-client-tls \
+  -o jsonpath='{.data.tls\.key}' | base64 -d > "$MTLS_DIR/tls.key"
 
-chmod 700 ~/.config/openshell/gateways/openshift/mtls
-chmod 600 ~/.config/openshell/gateways/openshift/mtls/tls.key
+chmod 700 "$MTLS_DIR"
+chmod 600 "$MTLS_DIR/tls.key"
 ```
 
 ### Verify the connection
@@ -243,7 +244,7 @@ Claude Code or curl. Bring your own workload image containing Claude Code,
 curl and Python, built for your cluster's worker architecture. Store it in a
 registry your cluster can pull from and set its image reference. The Claude
 commands below were validated with Claude Code `2.1.312`; use a version that
-supports the `--bare` flag:
+supports the `--bare` flag and uses its native executable:
 
 ```shell
 WORKLOAD_IMAGE=registry.example.com/your-team/claude-workload:your-tag
@@ -260,10 +261,21 @@ refresh behavior. A provider instance stores credentials for that profile.
 Attaching the provider grants the sandbox that access. A new gateway loads no
 example profiles automatically.
 
-The supplied profile is the release's `google-vertex-ai` example narrowed to
-`/usr/local/bin/claude`. Edit `binaries` in the profile to match the canonical
-Claude executable path in your workload image before importing it. Import the
-profile before creating the provider:
+Inspect the canonical Claude executable path in your workload image with
+Podman (select the worker architecture with `--platform` if needed):
+
+```shell
+podman run --rm --entrypoint sh "$WORKLOAD_IMAGE" \
+  -c 'readlink -f "$(command -v claude)"'
+```
+
+Set `binaries` in the supplied profile to that native executable path. A Node.js
+installation launches a shared interpreter; granting that interpreter access
+would allow other Node.js programs to use the provider too. Use the native
+Claude Code installation for this example.
+
+The profile allows only Claude prediction requests. Import it before creating
+the provider:
 
 ```shell
 openshell profile lint -f examples/claude-vertex/google-vertex-ai.yaml
@@ -276,6 +288,14 @@ openshell provider create \
   --config "VERTEX_AI_PROJECT_ID=${VERTEX_PROJECT_ID}" \
   --config VERTEX_AI_REGION=global
 ```
+
+The ADC example is intended for a disposable test project. The gateway stores
+your ADC refresh material, which can mint tokens with your GCP permissions.
+For shared deployments, use a dedicated service account with only the required
+Vertex AI permissions, such as `roles/aiplatform.user`, and the profile's
+`GOOGLE_SERVICE_ACCOUNT_KEY` credential path. See
+[service account authentication](https://docs.nvidia.com/openshell/v0.1.7/how-it-works/providers/google#service-account-key).
+Keep service account keys outside workload images and command arguments.
 
 Provider creation configures gateway-managed refresh and mints the first access
 token. The ADC file and refresh token remain outside the sandbox. Configure a
@@ -293,16 +313,40 @@ Attach the provider and explicitly select the Claude workload:
 
 ```shell
 openshell sandbox create --name my-sandbox \
-  --from "$WORKLOAD_IMAGE" --provider vertex-local
+  --from "$WORKLOAD_IMAGE" --provider vertex-local \
+  --policy examples/policies/deny-network.yaml
 ```
 
-When ready, the command opens a sandbox shell. The provider projects the
+The explicit base policy overrides any policy embedded in the workload image.
+From a local terminal, inspect both views before the network checks:
+
+```shell
+openshell policy get my-sandbox --base
+openshell policy get my-sandbox --full
+```
+
+Confirm the base has empty `network_policies` and the effective policy adds only
+the Vertex profile access. If a gateway-global policy changes these rules, use
+an isolated gateway with the policy shown here before continuing.
+
+When ready, the create command opens a sandbox shell. The provider projects the
 project, location and an opaque `GOOGLE_VERTEX_AI_TOKEN` placeholder into new
 processes. The real access token remains outside the workload.
 
 ## Run Claude Code in the sandbox
 
-From the sandbox shell, use native Vertex mode and send the placeholder as the
+From a local terminal, verify the token placeholder without printing its value:
+
+```shell
+openshell sandbox exec my-sandbox -- sh -c '
+  case "$GOOGLE_VERTEX_AI_TOKEN" in
+    openshell:resolve:*) echo placeholder ;;
+    *) echo "Expected a credential placeholder" >&2; exit 1 ;;
+  esac
+'
+```
+
+Expect `placeholder`. From the sandbox shell, use native Vertex mode and send it as the
 Authorization header. OpenShell handles the real token and refresh, so Claude
 does not need an ADC file or a gcloud installation in the workload:
 
@@ -328,8 +372,14 @@ Ask Claude, or your agent of choice, to curl `https://github.com`. The default p
 curl -I --max-time 20 https://github.com
 ```
 
-Expect curl to fail. Confirm an OCSF `DENIED` event for the curl binary and
-`github.com:443` in the audit logs.
+Expect curl to fail. From a local terminal, check the corresponding audit event:
+
+```shell
+openshell logs my-sandbox --source sandbox -n 200
+```
+
+Confirm an OCSF `DENIED` event for curl and `github.com:443`. A connection failure
+alone does not prove policy enforcement.
 
 From your local machine, resolve curl's canonical executable path inside your
 workload image and allow that binary:
@@ -357,6 +407,10 @@ A different binary should remain denied:
 python3 -c "import urllib.request; urllib.request.urlopen('https://github.com', timeout=20)"
 ```
 
+Expect a connection or permission error from Python and a matching `DENIED`
+event for its canonical executable and `github.com:443`. A missing `python3`
+command is a failed prerequisite.
+
 ## Inspect audit events
 
 OpenShell records network requests and policy decisions as OCSF events.
@@ -375,7 +429,7 @@ You can also inspect the sandbox interactively with `openshell term`.
 
 ## Troubleshooting
 
-- **Status shows Disconnected.** Verify the `Route` exists (`oc get route -n openshell`) and that the TLS bundle directory name matches the `--name` used in `gateway add`.
+- **Status shows Disconnected.** Verify the `Route` exists (`oc get route -n "$OPENSHELL_NAMESPACE"`) and that the TLS bundle directory name matches the `--name` used in `gateway add`.
 - **Certificate validation error.** The `pkiInitJob.serverDnsNames` value may not match the `Route` hostname. Uninstall and reinstall the Helm chart with the correct value.
 - **Gateway pod not running.** Inspect pod events and PVC provisioning before changing SCC permissions.
 - **Unknown provider type.** Import the matching profile before creating the provider.
@@ -396,7 +450,7 @@ Remove the OpenShell installation and local configuration when you are finished 
 openshell sandbox delete my-sandbox
 openshell provider delete vertex-local
 openshell profile delete google-vertex-ai
-helm uninstall openshell -n openshell --wait
-oc delete ns openshell
+helm uninstall openshell -n "$OPENSHELL_NAMESPACE" --wait
+oc delete ns "$OPENSHELL_NAMESPACE"
 openshell gateway remove openshift
 ```
