@@ -109,12 +109,27 @@ check_prerequisites() {
     fi
 
     # Check openshell CLI
+    #
+    # The CLI and the gateway are peers: the OpenShell upgrade guide does not
+    # support mixing a 0.0.x CLI with a 0.1.x gateway, so the CLI must be on the
+    # same release line as the chart this script installs (HELM_VERSION).
     if ! command -v openshell &> /dev/null; then
-        log_error "OpenShell CLI is not installed. Install with:"
+        log_error "OpenShell CLI is not installed. Install a ${HELM_VERSION%.*}.x CLI with:"
         log_error "  ${SCRIPT_DIR}/install-openshell-cli.sh"
+        log_error "The installer must provide a ${HELM_VERSION%.*}.x CLI (see PR #14 / the 0.1.x getting-started guide)."
         exit 1
     fi
-    log_info "OpenShell CLI: $(openshell --version 2>&1 | head -1 || echo 'installed')"
+    local openshell_version
+    openshell_version="$(openshell --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+    if [[ -z "${openshell_version}" ]]; then
+        log_warn "Could not determine the OpenShell CLI version; ensure it is a ${HELM_VERSION%.*}.x release."
+    elif [[ "${openshell_version%.*}" != "${HELM_VERSION%.*}" ]]; then
+        log_error "OpenShell CLI ${openshell_version} does not match the gateway release ${HELM_VERSION}."
+        log_error "Mixed ${openshell_version%.*}.x CLI and ${HELM_VERSION%.*}.x gateway peers are not supported."
+        log_error "Install a matching ${HELM_VERSION%.*}.x CLI with ${SCRIPT_DIR}/install-openshell-cli.sh and re-run."
+        exit 1
+    fi
+    log_info "OpenShell CLI: ${openshell_version:-installed} (expected ${HELM_VERSION%.*}.x)"
 
     # Check cluster connectivity
     if ! oc cluster-info &> /dev/null; then
@@ -169,10 +184,14 @@ setup_namespace() {
     if oc get scc "${SCC_NAME}" &> /dev/null; then
         log_info "Using SCC: ${SCC_NAME}"
         oc adm policy add-scc-to-user "${SCC_NAME}" -z openshell-sandbox -n "${NAMESPACE}" 2>/dev/null || true
-    else
-        log_warn "SCC '${SCC_NAME}' not found, using privileged SCC"
-        log_warn "Set OPENSHELL_SCC environment variable to use a different SCC"
+    elif [[ "${OPENSHELL_ALLOW_PRIVILEGED_SCC:-false}" == "true" ]]; then
+        # Opt-in only. The 0.1.x getting-started guide runs sandboxes under the
+        # namespace's assigned non-root UID and grants no privileged SCC.
+        log_warn "SCC '${SCC_NAME}' not found; OPENSHELL_ALLOW_PRIVILEGED_SCC=true, granting privileged SCC"
         oc adm policy add-scc-to-user privileged -z openshell-sandbox -n "${NAMESPACE}" 2>/dev/null || true
+    else
+        log_info "SCC '${SCC_NAME}' not found; leaving openshell-sandbox on the namespace default (non-root UID)"
+        log_info "Set OPENSHELL_SCC to a custom SCC, or OPENSHELL_ALLOW_PRIVILEGED_SCC=true to grant privileged."
     fi
 
     # Add SCC for certgen job
@@ -199,14 +218,14 @@ install_helm() {
     local helm_args=(
         --version "${HELM_VERSION}"
         --namespace "${NAMESPACE}"
-        --set "gateway.image.registry=${GATEWAY_IMAGE_REPOSITORY%%/*}"
-        --set "gateway.image.repository=${GATEWAY_IMAGE_REPOSITORY#*/}"
+        --set-string "gateway.image.registry=${GATEWAY_IMAGE_REPOSITORY%%/*}"
+        --set-string "gateway.image.repository=${GATEWAY_IMAGE_REPOSITORY#*/}"
         --set-string "gateway.image.tag=${GATEWAY_IMAGE_TAG}"
-        --set "supervisor.image.registry=${SUPERVISOR_IMAGE_REPOSITORY%%/*}"
-        --set "supervisor.image.repository=${SUPERVISOR_IMAGE_REPOSITORY#*/}"
+        --set-string "supervisor.image.registry=${SUPERVISOR_IMAGE_REPOSITORY%%/*}"
+        --set-string "supervisor.image.repository=${SUPERVISOR_IMAGE_REPOSITORY#*/}"
         --set-string "supervisor.image.tag=${SUPERVISOR_IMAGE_TAG}"
-        --set "sandboxRuntime.image.registry=${SANDBOX_RUNTIME_IMAGE_REPOSITORY%%/*}"
-        --set "sandboxRuntime.image.repository=${SANDBOX_RUNTIME_IMAGE_REPOSITORY#*/}"
+        --set-string "sandboxRuntime.image.registry=${SANDBOX_RUNTIME_IMAGE_REPOSITORY%%/*}"
+        --set-string "sandboxRuntime.image.repository=${SANDBOX_RUNTIME_IMAGE_REPOSITORY#*/}"
         --set-string "sandboxRuntime.image.tag=${SANDBOX_RUNTIME_IMAGE_TAG}"
         --set podSecurityContext.fsGroup=null
         --set securityContext.runAsUser=null
@@ -216,6 +235,26 @@ install_helm() {
 
     # Check if already installed
     if helm list -n "${NAMESPACE}" | grep -q "^openshell"; then
+        # A cross-release upgrade (e.g. 0.0.x -> 0.1.x) is not a plain helm
+        # upgrade: the OpenShell upgrade guide requires recreating existing
+        # sandboxes because their persisted runtime descriptors are incompatible
+        # across releases. Stop and show the steps unless the operator has done
+        # them and opted in.
+        local installed_version
+        installed_version="$(helm list -n "${NAMESPACE}" -o json 2>/dev/null \
+            | grep -o '"chart":"openshell-[0-9][^"]*"' | head -1 \
+            | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+        if [[ -n "${installed_version}" && "${installed_version%.*}" != "${HELM_VERSION%.*}" \
+              && "${OPENSHELL_ALLOW_MAJOR_UPGRADE:-false}" != "true" ]]; then
+            log_error "An OpenShell ${installed_version} release is installed in '${NAMESPACE}'; this script installs ${HELM_VERSION}."
+            log_error "Upgrading across releases is not a plain helm upgrade. Before continuing:"
+            log_error "  1. Delete existing sandboxes (their ${installed_version%.*}.x runtime descriptors are incompatible):"
+            log_error "       openshell sandbox list    # then for each: openshell sandbox delete <name>"
+            log_error "  2. Follow the OpenShell ${HELM_VERSION} upgrade guide:"
+            log_error "       https://docs.nvidia.com/openshell/v${HELM_VERSION}/upgrade/"
+            log_error "  3. Re-run with OPENSHELL_ALLOW_MAJOR_UPGRADE=true to proceed with the upgrade."
+            exit 1
+        fi
         log_info "OpenShell already installed, upgrading..."
         helm upgrade openshell oci://ghcr.io/nvidia/openshell/helm-chart "${helm_args[@]}"
     else
@@ -339,11 +378,13 @@ display_info() {
     echo ""
 
     # Show current SCC in use
-    local current_scc="unknown"
-    if oc get scc openshell-sandbox-minimum-required &> /dev/null; then
-        current_scc="openshell-sandbox-minimum-required (custom)"
+    local current_scc
+    if oc get scc "${SCC_NAME}" &> /dev/null; then
+        current_scc="${SCC_NAME} (custom)"
+    elif [[ "${OPENSHELL_ALLOW_PRIVILEGED_SCC:-false}" == "true" ]]; then
+        current_scc="privileged (opt-in)"
     else
-        current_scc="privileged (default)"
+        current_scc="namespace default, non-root UID (no privileged grant)"
     fi
     log_warn "Current SCC: ${current_scc}"
     echo ""
