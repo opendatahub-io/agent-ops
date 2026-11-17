@@ -1,0 +1,23 @@
+# Shared OpenShift settings for chart 0.1.7 and ODH runtime v0.1.7-rhaiv.0.
+# Set the Route certificate hostname and database options in the Helm command.
+gateway:
+  image:
+    registry: quay.io
+    repository: opendatahub/odh-openshell-gateway
+    tag: v0.1.7-rhaiv.0
+supervisor:
+  image:
+    registry: quay.io
+    repository: opendatahub/odh-openshell-supervisor
+    tag: v0.1.7-rhaiv.0
+sandboxRuntime:
+  image:
+    registry: quay.io
+    repository: opendatahub/odh-openshell-sandbox
+    tag: v0.1.7-rhaiv.0
+podSecurityContext: null
+securityContext:
+  runAsUser: null
+server:
+  auth:
+    allowUnauthenticatedUsers: false

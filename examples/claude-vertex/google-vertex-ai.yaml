@@ -1,0 +1,98 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+# Based on OpenShell v0.1.7-rhaiv.0 (dea15169db64d3eb37aa90458a2fd79bf843ba59).
+# Import explicitly. Edit binaries to match the canonical Claude executable
+# path in your own workload image; this example assumes /usr/local/bin/claude.
+# Use a native executable, not a shared Node.js interpreter.
+# ADC refresh material stays at the gateway; Claude sends only the access-token
+# placeholder in its Authorization header to the declared Vertex endpoints.
+
+id: google-vertex-ai
+display_name: Google Vertex AI
+description: Anthropic Claude inference on Google Vertex AI
+category: inference
+inference_capable: true
+credentials:
+  - name: service_account_key
+    description: Google service account JSON refresh bootstrap material; not injected into sandboxes
+    env_vars: [GOOGLE_SERVICE_ACCOUNT_KEY]
+    required: false
+  - name: service_account_token
+    description: Google Cloud access token refreshed from service account JWT material
+    env_vars: [GOOGLE_VERTEX_AI_SERVICE_ACCOUNT_TOKEN, VERTEX_AI_SERVICE_ACCOUNT_TOKEN]
+    required: false
+    auth_style: bearer
+    header_name: authorization
+    refresh:
+      strategy: google_service_account_jwt
+      token_url: https://oauth2.googleapis.com/token
+      scopes: [https://www.googleapis.com/auth/cloud-platform]
+      refresh_before_seconds: 300
+      max_lifetime_seconds: 3600
+      material:
+        - name: client_email
+          description: Google service account email
+          required: true
+        - name: private_key
+          description: Google service account private key
+          required: true
+          secret: true
+        - name: subject
+          description: Optional delegated user email for domain-wide delegation
+  - name: gcloud_adc_token
+    description: Google Cloud access token refreshed via gcloud Application Default Credentials
+    env_vars: [GOOGLE_VERTEX_AI_TOKEN, VERTEX_AI_TOKEN]
+    required: false
+    auth_style: bearer
+    header_name: authorization
+    refresh:
+      strategy: oauth2_refresh_token
+      token_url: https://oauth2.googleapis.com/token
+      scopes: [https://www.googleapis.com/auth/cloud-platform]
+      refresh_before_seconds: 300
+      max_lifetime_seconds: 3600
+      material:
+        - name: client_id
+          description: Google OAuth2 client ID from gcloud ADC
+          required: true
+        - name: client_secret
+          description: Google OAuth2 client secret from gcloud ADC
+          required: true
+          secret: true
+        - name: refresh_token
+          description: Google OAuth2 refresh token from gcloud ADC
+          required: true
+          secret: true
+discovery:
+  credentials: [service_account_token, gcloud_adc_token]
+endpoints:
+  - host: "*-aiplatform.googleapis.com"
+    port: 443
+    protocol: rest
+    rules:
+      - allow: {method: POST, path: "/v1/projects/*/locations/*/publishers/anthropic/models/*:rawPredict"}
+      - allow: {method: POST, path: "/v1/projects/*/locations/*/publishers/anthropic/models/*:streamRawPredict"}
+    enforcement: enforce
+  - host: "aiplatform.googleapis.com"
+    port: 443
+    protocol: rest
+    rules:
+      - allow: {method: POST, path: "/v1/projects/*/locations/*/publishers/anthropic/models/*:rawPredict"}
+      - allow: {method: POST, path: "/v1/projects/*/locations/*/publishers/anthropic/models/*:streamRawPredict"}
+    enforcement: enforce
+  - host: "aiplatform.us.rep.googleapis.com"
+    port: 443
+    protocol: rest
+    rules:
+      - allow: {method: POST, path: "/v1/projects/*/locations/*/publishers/anthropic/models/*:rawPredict"}
+      - allow: {method: POST, path: "/v1/projects/*/locations/*/publishers/anthropic/models/*:streamRawPredict"}
+    enforcement: enforce
+  - host: "aiplatform.eu.rep.googleapis.com"
+    port: 443
+    protocol: rest
+    rules:
+      - allow: {method: POST, path: "/v1/projects/*/locations/*/publishers/anthropic/models/*:rawPredict"}
+      - allow: {method: POST, path: "/v1/projects/*/locations/*/publishers/anthropic/models/*:streamRawPredict"}
+    enforcement: enforce
+
+binaries: [/usr/local/bin/claude]
