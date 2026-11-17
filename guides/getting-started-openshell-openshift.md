@@ -58,8 +58,10 @@ Keep this private backup until you have verified your registrations after the
 installation. To recover a missing remote registration, restore its directory
 from `$CLI_BACKUP_DIR/openshell/gateways/` into `$CLI_CONFIG_ROOT/gateways/`.
 Re-register the package-managed local gateway using its current TLS bundle.
-If using the snap package, also back up its CLI configuration under
-`~/snap/openshell/common/.config/openshell` before refreshing it.
+On Linux, this pinned installer selects a native Debian or RPM package, even
+when an OpenShell snap is installed. It does not refresh the snap; check which
+CLI your `PATH` selects. Setting `OPENSHELL_INSTALL_METHOD=snap` fails because
+snap channels do not support the pinned release tag.
 
 Install the CLI:
 

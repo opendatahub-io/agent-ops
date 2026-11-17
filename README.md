@@ -26,7 +26,8 @@ For a fresh test installation, the deployment helper selects chart `0.1.7` and
 ODH runtime `v0.1.7-rhaiv.0`, loading the same
 [shared Helm values](examples/openshift/values-odh.yaml) as the getting-started guide.
 Install the CLI with
-`scripts/install-openshell-cli.sh` and install the Agent Sandbox operator first.
+`scripts/install-openshell-cli.sh`, install `jq`, and install the Agent Sandbox
+operator first.
 Choose an unused namespace and local gateway name:
 
 ```shell
