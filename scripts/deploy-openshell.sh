@@ -16,7 +16,7 @@ case "$NAMESPACE" in default|kube-*|openshift-*|agent-sandbox-system|kubernetes-
 [[ "$GATEWAY_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || fail 'Invalid gateway name.'
 [[ "$HELM_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail 'Invalid chart version.'
 [[ -r "$VALUES_FILE" ]] || fail "Shared Helm values not found: $VALUES_FILE"
-for tool in oc helm openshell base64; do command -v "$tool" >/dev/null || fail "Missing command: $tool"; done
+for tool in oc helm openshell base64 jq; do command -v "$tool" >/dev/null || fail "Missing command: $tool"; done
 CLI_VERSION=$(openshell --version)
 [[ "$CLI_VERSION" == "openshell ${HELM_VERSION}" || "$CLI_VERSION" == "openshell ${HELM_VERSION}-"* ]] || fail "CLI/chart mismatch: ${CLI_VERSION}; install the matching CLI with ${SCRIPT_DIR}/install-openshell-cli.sh."
 [[ ! -e "$CONFIG_DIR" ]] || fail "Gateway configuration already exists: ${GATEWAY_NAME}. Choose OPENSHELL_GATEWAY_NAME without overwriting it."
@@ -70,22 +70,25 @@ helm "${helm_args[@]}"
 oc create route passthrough openshell --service=openshell --port=8080 \
     --hostname="$ROUTE_HOST" -n "$NAMESPACE" --dry-run=client -o yaml | oc apply -f -
 
-extract_tls() {
-    umask 077
-    mkdir -p "$CONFIG_DIR/mtls"
-    chmod 700 "$CONFIG_DIR" "$CONFIG_DIR/mtls"
-    oc get secret openshell-client-tls -n "$NAMESPACE" -o jsonpath='{.data.ca\.crt}' | base64 -d > "$CONFIG_DIR/mtls/ca.crt"
-    oc get secret openshell-client-tls -n "$NAMESPACE" -o jsonpath='{.data.tls\.crt}' | base64 -d > "$CONFIG_DIR/mtls/tls.crt"
-    oc get secret openshell-client-tls -n "$NAMESPACE" -o jsonpath='{.data.tls\.key}' | base64 -d > "$CONFIG_DIR/mtls/tls.key"
-    chmod 600 "$CONFIG_DIR/mtls/ca.crt" "$CONFIG_DIR/mtls/tls.crt" "$CONFIG_DIR/mtls/tls.key"
-}
+umask 077
+mkdir -p "$(dirname "$CONFIG_DIR")"
+STAGING_DIR=$(mktemp -d "$(dirname "$CONFIG_DIR")/.${GATEWAY_NAME}.XXXXXX")
+trap 'rm -rf -- "$STAGING_DIR"' EXIT
+mkdir -p "$STAGING_DIR/gateway/mtls"
+for key in ca.crt tls.crt tls.key; do
+    oc get secret openshell-client-tls -n "$NAMESPACE" -o "jsonpath={.data.${key//./\\.}}" |
+        base64 -d > "$STAGING_DIR/gateway/mtls/$key"
+    [[ -s "$STAGING_DIR/gateway/mtls/$key" ]] || fail "Missing TLS material: $key"
+done
+printf '%s\n' "$NAMESPACE_UID" > "$STAGING_DIR/gateway/agent-ops-namespace-uid"
+cp -R "$STAGING_DIR/gateway/mtls" "$STAGING_DIR/mtls"
+mv "$STAGING_DIR/gateway" "$CONFIG_DIR"
 # Registration may import a package-managed bundle; restore this cluster's bundle afterward.
-extract_tls
 openshell gateway add "https://${ROUTE_HOST}" --local --name "$GATEWAY_NAME"
-extract_tls
-printf '%s\n' "$NAMESPACE_UID" > "$CONFIG_DIR/agent-ops-namespace-uid"
+cp "$STAGING_DIR/mtls/"* "$CONFIG_DIR/mtls/"
 for attempt in {1..15}; do
-    if status=$(openshell status --gateway "$GATEWAY_NAME" 2>&1) && [[ "$status" == *Connected* ]]; then
+    if status=$(openshell status --gateway "$GATEWAY_NAME" --output json) &&
+        jq -e '.status == "connected" and .authentication.status == "authenticated"' <<< "$status" >/dev/null; then
         printf '%s\n' "$status"
         printf 'OpenShell is ready. Use gateway %s and namespace %s.\n' "$GATEWAY_NAME" "$NAMESPACE"
         exit 0
@@ -93,4 +96,4 @@ for attempt in {1..15}; do
     sleep 2
 done
 printf '%s\n' "$status" >&2
-fail 'Gateway did not become Connected. Inspect the Route and TLS configuration.'
+fail 'Gateway did not become connected and authenticated over gRPC. Inspect the Route and TLS configuration.'
