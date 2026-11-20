@@ -3,6 +3,7 @@ import http.client
 import io
 import gzip
 import tempfile
+import urllib.error
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -27,6 +28,27 @@ from sync import (  # noqa: E402
 
 
 class TransportFailureTest(unittest.TestCase):
+    def test_wrapped_connection_timeout_retries_then_recovers(self):
+        timeout = urllib.error.URLError(TimeoutError("connection timed out"))
+        response = io.BytesIO(b'{"tags": []}')
+        response.headers = {}
+        with (
+            patch("sync.urllib.request.urlopen", side_effect=[timeout, response]) as request,
+            patch("sync.time.sleep"),
+            patch("sys.stderr", new_callable=io.StringIO) as diagnostic,
+        ):
+            self.assertEqual(sync.fetch_json("https://example.org/tags"), {"tags": []})
+        self.assertEqual(request.call_count, 2)
+        self.assertIn("SOURCE_TRANSPORT_INTERRUPTED", diagnostic.getvalue())
+
+    def test_non_timeout_url_errors_do_not_retry(self):
+        failure = urllib.error.URLError("DNS lookup failed")
+        with patch("sync.urllib.request.urlopen", side_effect=failure) as request:
+            with self.assertRaisesRegex(RuntimeError, "DNS lookup failed") as caught:
+                sync.fetch_json("https://example.org/tags")
+        self.assertIs(caught.exception.__cause__, failure)
+        self.assertEqual(request.call_count, 1)
+
     def test_gzip_response_is_requested_and_decoded(self):
         response = io.BytesIO(gzip.compress(b'{"tags": [{"name": "odh-stable"}]}'))
         response.headers = {"Content-Encoding": "gzip"}
@@ -78,6 +100,21 @@ class TransportFailureTest(unittest.TestCase):
         with patch("sync.fetch_json", side_effect=fetch):
             tags = sync.fetch_image_tags("quay.io/opendatahub/example")
         self.assertEqual([tag["name"] for tag in tags], ["build-a", "build-b"])
+
+    def test_build_discovery_continues_beyond_a_hundred_noise_tags(self):
+        pages = 0
+        def fetch(url):
+            nonlocal pages
+            if "specificTag=" in url:
+                return {"tags": []}
+            pages += 1
+            if pages <= 21:
+                return {"tags": [{"name": f"sha256-noise-{pages}-{i}.sig"} for i in range(5)], "has_additional": True}
+            return {"tags": [{"name": "commit-abc", "manifest_digest": "sha256:abc"}], "has_additional": False}
+        with patch("sync.fetch_json", side_effect=fetch):
+            tags = sync.fetch_image_tags("quay.io/example/image")
+        self.assertEqual([tag["name"] for tag in select_build_tags(tags)], ["commit-abc"])
+        self.assertEqual(pages, 22)
 
 
 class TagSelectionTest(unittest.TestCase):

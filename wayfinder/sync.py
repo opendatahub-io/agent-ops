@@ -334,6 +334,8 @@ def fetch_json_once(url: str, headers: dict[str, str] | None = None) -> dict | N
         detail = exc.read().decode("utf-8", errors="replace")[:300]
         raise RuntimeError(f"GET {url} failed: HTTP {exc.code} {detail}") from exc
     except urllib.error.URLError as exc:
+        if isinstance(exc.reason, TimeoutError):
+            raise exc.reason from exc
         raise RuntimeError(f"GET {url} failed: {exc.reason}") from exc
 
 
@@ -348,13 +350,15 @@ def fetch_image_tags(repository: str) -> list[dict]:
     namespace, name = quay_namespace(repository)
     base = f"https://quay.io/api/v1/repository/{namespace}/{name}/tag/"
     tags = []
-    for page in range(1, 21):
+    page = 1
+    while True:
         listing = fetch_json(f"{base}?limit=5&page={page}&onlyActiveTags=true")
         if listing is None:
             raise RuntimeError(f"Quay repository not found: {repository}")
         tags.extend(listing.get("tags") or [])
-        if not listing.get("has_additional"):
+        if not listing.get("has_additional") or len(select_build_tags(tags)) >= 6:
             break
+        page += 1
     seen = {(tag.get("name"), tag.get("manifest_digest"), tag.get("last_modified")) for tag in tags}
     for channel in CHANNEL_NAMES:
         extra = fetch_json(f"{base}?specificTag={channel}&limit=1&onlyActiveTags=true")

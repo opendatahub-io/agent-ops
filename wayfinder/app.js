@@ -105,11 +105,107 @@ async function fetchJson(path) {
   return response.json();
 }
 
+function requireRecord(value, path) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError(`Invalid ${path}: expected an object`);
+  }
+}
+
+function requireText(value, path) {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new TypeError(`Invalid ${path}: expected nonempty text`);
+  }
+}
+
+function textFields(value, fields, path) {
+  for (const key of fields) {
+    if (value[key] != null && typeof value[key] !== "string") {
+      throw new TypeError(`Invalid ${path}.${key}: expected text`);
+    }
+  }
+}
+
+function webLink(value, path) {
+  requireText(value, path);
+  if (!["https:", "http:"].includes(new URL(value).protocol)) {
+    throw new TypeError(`Invalid ${path}: expected an HTTP(S) URL`);
+  }
+}
+
+function entries(value, key, path, validate, required = false) {
+  const list = value[key];
+  if (list == null && !required) return;
+  if (!Array.isArray(list)) throw new TypeError(`Invalid ${path}.${key}: expected an array`);
+  list.forEach((entry, index) => {
+    const itemPath = `${path}.${key}[${index}]`;
+    requireRecord(entry, itemPath);
+    validate(entry, itemPath);
+  });
+}
+
+function validateTag(tag, path) {
+  textFields(tag, ["name", "digest", "lastModified"], path);
+}
+
+function validateData(data, kind) {
+  requireRecord(data, kind);
+  textFields(data, ["generatedAt"], kind);
+  entries(data, "products", kind, (product, path) => {
+    requireText(product.key, `${path}.key`);
+    if (kind === "catalog") {
+      requireText(product.name, `${path}.name`);
+      textFields(product, ["tagline", "description", "requirements", "sourceLabel", "releaseRepo"], path);
+      if (product.source != null) webLink(product.source, `${path}.source`);
+      for (const key of ["docs", "downloads"]) {
+        entries(product, key, path, (item, itemPath) => {
+          requireText(item.title, `${itemPath}.title`);
+          textFields(item, ["detail", "value", "icon"], itemPath);
+          if (key === "docs" || item.url != null) webLink(item.url, `${itemPath}.url`);
+        });
+      }
+    }
+    entries(product, "images", path, (image, imagePath) => {
+      requireText(image.name, `${imagePath}.name`);
+      requireText(image.repository, `${imagePath}.repository`);
+      textFields(image, ["role", "pullTag", "lastModified"], imagePath);
+      if (image.pull != null) {
+        requireRecord(image.pull, `${imagePath}.pull`);
+        validateTag(image.pull, `${imagePath}.pull`);
+      }
+      for (const key of ["builds", "channels"]) {
+        entries(image, key, imagePath, (tag, tagPath) => {
+          requireText(tag.name, `${tagPath}.name`);
+          validateTag(tag, tagPath);
+        });
+      }
+    });
+    entries(product, "workflows", path, (workflow, workflowPath) => {
+      requireText(workflow.name, `${workflowPath}.name`);
+      requireText(workflow.repo, `${workflowPath}.repo`);
+      textFields(workflow, ["status", "conclusion", "branch", "sha", "updatedAt"], workflowPath);
+      if (workflow.url != null) webLink(workflow.url, `${workflowPath}.url`);
+    });
+    entries(product, "releases", path, (release, releasePath) => {
+      requireText(release.tag, `${releasePath}.tag`);
+      requireText(release.upstreamVersion, `${releasePath}.upstreamVersion`);
+      if (typeof release.allBuilt !== "boolean") throw new TypeError(`Invalid ${releasePath}.allBuilt`);
+      entries(release, "components", releasePath, (component, componentPath) => {
+        requireText(component.repository, `${componentPath}.repository`);
+        requireText(component.tag, `${componentPath}.tag`);
+        if (typeof component.found !== "boolean") throw new TypeError(`Invalid ${componentPath}.found`);
+        textFields(component, ["name", "digest", "lastModified"], componentPath);
+        if (component.found || component.registryUrl != null) webLink(component.registryUrl, `${componentPath}.registryUrl`);
+      }, true);
+    });
+  }, true);
+  return data;
+}
+
 async function loadData() {
   liveDataError = false;
   const [cat, live] = await Promise.all([
-    fetchJson("products.json"),
-    fetchJson("data/status.json").catch(error => {
+    fetchJson("products.json").then(data => validateData(data, "catalog")),
+    fetchJson("data/status.json").then(data => validateData(data, "status")).catch(error => {
       liveDataError = true;
       console.error("Live status unavailable", {
         stage: "load_status", code: "STATUS_LOAD_FAILED", resource: "data/status.json", cause: error,
@@ -141,8 +237,12 @@ function buildNav() {
   const products = catalog?.products || [];
   products.forEach(product => {
     const item = el("a", "nav-item", product.name);
+    item.href = "#" + encodeURIComponent(product.key);
     item.dataset.key = product.key;
-    item.addEventListener("click", () => selectProduct(product.key));
+    item.addEventListener("click", event => {
+      event.preventDefault();
+      selectProduct(product.key);
+    });
     nav.append(item);
   });
   if (liveData?.generatedAt) {
@@ -375,7 +475,9 @@ function renderImageCard(img, liveImg) {
   card.append(cmdBlock(`podman pull ${img.repository}:${tag}`));
   const meta = el("div", "image-meta");
   if (liveImg?.pull) {
-    meta.innerHTML = `<strong>${tag}</strong> · ${shortDigest(liveImg.pull.digest)} · ${formatDate(liveImg.pull.lastModified)}<br/>`;
+    meta.append(el("strong", null, tag));
+    meta.append(document.createTextNode(` · ${shortDigest(liveImg.pull.digest)} · ${formatDate(liveImg.pull.lastModified)}`));
+    meta.append(el("br"));
   }
   const repo = img.repository.replace("quay.io/", "");
   meta.append(extLink(`https://quay.io/repository/${repo}`, "View on Quay →", null));

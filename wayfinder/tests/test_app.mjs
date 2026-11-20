@@ -46,7 +46,7 @@ class Element {
 
 function descendants(node) { return node.children.flatMap(child => [child, ...descendants(child)]); }
 
-async function boot({ status = { products: [] }, statusFailure, catalogFailure } = {}) {
+async function boot({ status = { products: [] }, catalogData = catalog, statusFailure, catalogFailure } = {}) {
   const roots = Object.fromEntries(
     ["product-nav", "sync-time", "content-inner", "sidebar", "menu-toggle"].map(id => {
       const node = new Element("div");
@@ -63,7 +63,7 @@ async function boot({ status = { products: [] }, statusFailure, catalogFailure }
     querySelectorAll: selector => Object.values(roots).flatMap(root => root.querySelectorAll(selector)),
   };
   const context = vm.createContext({
-    document, Intl, Date, setTimeout,
+    document, Intl, Date, URL, setTimeout,
     location: { hash: "#openshell" },
     history: { replaceState() {} },
     window: { scrollTo() {} },
@@ -76,7 +76,7 @@ async function boot({ status = { products: [] }, statusFailure, catalogFailure }
         status: failure === "http" ? 503 : 200,
         json: async () => {
           if (failure === "json") throw new SyntaxError("Invalid JSON");
-          return path === "products.json" ? catalog : status;
+          return path === "products.json" ? catalogData : status;
         },
       };
     },
@@ -144,4 +144,41 @@ test("a catalog-load failure reports a diagnostic and visible error", async () =
   const { roots, errors } = await boot({ catalogFailure: "http" });
   assert.match(roots["content-inner"].textContent, /The page could not be loaded/);
   assert.equal(errors[0][1].code, "PAGE_INIT_FAILED");
+});
+
+for (const [label, status] of [
+  ["non-array products", { products: {} }],
+  ["null product", { products: [null] }],
+  ["non-array images", { products: [{ key: "openshell", images: {} }] }],
+  ["invalid build tag", { products: [{ key: "openshell", images: [{ name: "Gateway", repository: "quay.io/example/gateway", builds: [{ name: 42 }] }] }] }],
+  ["invalid workflow name", { products: [{ key: "openshell", workflows: [{ name: {}, repo: "example/repo" }] }] }],
+  ["invalid release component", { products: [{ key: "openshell", releases: [{ tag: "v1.0.0", upstreamVersion: "1.0.0", allBuilt: false, components: [null] }] }] }],
+  ["unsafe workflow URL", { products: [{ key: "openshell", workflows: [{ name: "CI", repo: "example/repo", url: "javascript:alert(1)" }] }] }],
+]) {
+  test(`${label} degrades to status unavailable and keeps the guide usable`, async () => {
+    const { roots, errors } = await boot({ status });
+    assert.equal(roots["sync-time"].textContent, "Status unavailable");
+    assert.equal(descendants(roots["content-inner"]).find(n => n.textContent === "Get started →").href, guide);
+    assert.equal(errors[0][1].code, "STATUS_LOAD_FAILED");
+    assert.ok(errors[0][1].cause);
+  });
+}
+
+test("malformed catalog inputs use the initialization failure path", async () => {
+  const catalogData = { products: [{ key: "broken", name: "Broken", docs: [{ title: "Guide", url: "javascript:alert(1)" }] }] };
+  const { roots, errors } = await boot({ catalogData });
+  assert.match(roots["content-inner"].textContent, /The page could not be loaded/);
+  assert.equal(errors[0][1].code, "PAGE_INIT_FAILED");
+});
+
+test("product links provide native keyboard activation and select the linked product", async () => {
+  const catalogData = { products: [...catalog.products, { key: "gateway", name: "Gateway" }] };
+  const { roots } = await boot({ catalogData });
+  const link = descendants(roots["product-nav"]).find(n => n.dataset.key === "gateway");
+  assert.equal(link.tagName, "a");
+  assert.equal(link.href, "#gateway");
+  let prevented = false;
+  link.listeners.click({ preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.ok(descendants(roots["content-inner"]).some(n => n.tagName === "h1" && n.textContent === "Gateway"));
 });
