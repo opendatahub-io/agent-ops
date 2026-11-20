@@ -307,7 +307,7 @@ def fetch_json(url: str, headers: dict[str, str] | None = None) -> dict | None:
     for attempt in range(3):
         try:
             return fetch_json_once(url, headers)
-        except (http.client.IncompleteRead, http.client.RemoteDisconnected, TimeoutError) as exc:
+        except (EOFError, http.client.IncompleteRead, http.client.RemoteDisconnected, TimeoutError) as exc:
             print(json.dumps({
                 "stage": "fetch_source", "code": "SOURCE_TRANSPORT_INTERRUPTED",
                 "url": url, "attempt": attempt + 1, "cause": type(exc).__name__,

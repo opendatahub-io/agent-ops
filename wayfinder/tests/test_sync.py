@@ -56,6 +56,44 @@ class TransportFailureTest(unittest.TestCase):
             self.assertEqual(sync.fetch_json("https://example.org/tags"), {"tags": [{"name": "odh-stable"}]})
         self.assertEqual(request.call_args.args[0].get_header("Accept-encoding"), "gzip")
 
+    def test_truncated_gzip_response_recovers_with_a_fresh_request(self):
+        payload = gzip.compress(b'{"tags": []}')
+        partial = io.BytesIO(payload[:-5])
+        partial.headers = {"Content-Encoding": "gzip"}
+        complete = io.BytesIO(payload)
+        complete.headers = {"Content-Encoding": "gzip"}
+        with (
+            patch("sync.urllib.request.urlopen", side_effect=[partial, complete]) as request,
+            patch("sync.time.sleep"),
+            patch("sys.stderr", new_callable=io.StringIO) as diagnostic,
+        ):
+            self.assertEqual(sync.fetch_json("https://example.org/tags"), {"tags": []})
+        self.assertEqual(request.call_count, 2)
+        self.assertIn('"cause": "EOFError"', diagnostic.getvalue())
+
+    def test_persistent_truncated_gzip_preserves_previous_snapshot(self):
+        responses = []
+        for _ in range(3):
+            response = io.BytesIO(gzip.compress(b'{"tags": []}')[:-5])
+            response.headers = {"Content-Encoding": "gzip"}
+            responses.append(response)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "status.json"
+            output.write_text('{"previous": true}')
+            with (
+                patch.object(sync, "OUTPUT_PATH", output),
+                patch("sync.load_catalog", return_value={"products": [{"key": "test", "images": [{"repository": "quay.io/example/image"}]}]}),
+                patch("sync.urllib.request.urlopen", side_effect=responses) as request,
+                patch("sync.time.sleep"),
+                patch("sys.stderr", new_callable=io.StringIO) as diagnostic,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "after 3 attempts") as caught:
+                    sync.main()
+            self.assertIsInstance(caught.exception.__cause__, EOFError)
+            self.assertEqual(request.call_count, 3)
+            self.assertEqual(output.read_text(), '{"previous": true}')
+            self.assertEqual(diagnostic.getvalue().count("SOURCE_TRANSPORT_INTERRUPTED"), 3)
+
     def test_truncated_response_recovers_with_a_fresh_request(self):
         partial = http.client.IncompleteRead(b'{"tags":', 30)
         response = io.BytesIO(b'{"tags": []}')
