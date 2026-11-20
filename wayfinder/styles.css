@@ -380,6 +380,33 @@ body {
 
 .card .cmd-wrap { margin-top: auto; }
 
+.install-options { grid-template-columns: minmax(0, 1fr); }
+.install-options .card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  align-items: center;
+  gap: 1.5rem;
+  padding: 1.25rem;
+}
+.install-options .card:first-child {
+  border-left: 4px solid var(--red);
+}
+.install-info p { margin-bottom: 0; }
+.install-actions { min-width: 0; display: grid; gap: .6rem; justify-items: start; }
+.install-actions .cmd-wrap { width: 100%; }
+.install-actions .cmd-wrap code {
+  min-width: 0;
+  white-space: pre;
+  word-break: normal;
+  overflow-x: auto;
+}
+.brand-icon { flex-shrink: 0; }
+@media (max-width: 700px) {
+  .install-options .card { grid-template-columns: minmax(0, 1fr); gap: .75rem; }
+  .tab-bar { overflow-x: auto; }
+  .tab-btn { white-space: nowrap; }
+}
+
 /* ── Doc cards ──────────────────────────────────────────────────────── */
 .doc-card {
   text-decoration: none;

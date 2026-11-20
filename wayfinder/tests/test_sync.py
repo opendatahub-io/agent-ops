@@ -1,6 +1,7 @@
 import sys
 import http.client
 import io
+import gzip
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,10 +27,19 @@ from sync import (  # noqa: E402
 
 
 class TransportFailureTest(unittest.TestCase):
+    def test_gzip_response_is_requested_and_decoded(self):
+        response = io.BytesIO(gzip.compress(b'{"tags": [{"name": "odh-stable"}]}'))
+        response.headers = {"Content-Encoding": "gzip"}
+        with patch("sync.urllib.request.urlopen", return_value=response) as request:
+            self.assertEqual(sync.fetch_json("https://example.org/tags"), {"tags": [{"name": "odh-stable"}]})
+        self.assertEqual(request.call_args.args[0].get_header("Accept-encoding"), "gzip")
+
     def test_truncated_response_recovers_with_a_fresh_request(self):
         partial = http.client.IncompleteRead(b'{"tags":', 30)
+        response = io.BytesIO(b'{"tags": []}')
+        response.headers = {}
         with (
-            patch("sync.urllib.request.urlopen", side_effect=[partial, io.BytesIO(b'{"tags": []}')]) as request,
+            patch("sync.urllib.request.urlopen", side_effect=[partial, response]) as request,
             patch("sync.time.sleep"),
             patch("sys.stderr", new_callable=io.StringIO) as diagnostic,
         ):
@@ -44,6 +54,7 @@ class TransportFailureTest(unittest.TestCase):
             output.write_text('{"previous": true}')
             with (
                 patch.object(sync, "OUTPUT_PATH", output),
+                patch("sync.load_catalog", return_value={"products": [{"key": "test", "images": [{"repository": "quay.io/example/image"}]}]}),
                 patch("sync.urllib.request.urlopen", side_effect=partial) as request,
                 patch("sync.time.sleep"),
                 patch("sys.stderr", new_callable=io.StringIO) as diagnostic,
@@ -54,6 +65,19 @@ class TransportFailureTest(unittest.TestCase):
             self.assertEqual(request.call_count, 3)
             self.assertEqual(output.read_text(), '{"previous": true}')
             self.assertEqual(diagnostic.getvalue().count("SOURCE_TRANSPORT_INTERRUPTED"), 3)
+
+    def test_image_pages_are_combined_and_channel_queries_are_active_only(self):
+        def fetch(url):
+            if "specificTag=" in url:
+                self.assertIn("limit=1&onlyActiveTags=true", url)
+                return {"tags": []}
+            if "page=1&" in url:
+                return {"tags": [{"name": "build-a"}], "has_additional": True}
+            self.assertIn("page=2&", url)
+            return {"tags": [{"name": "build-b"}], "has_additional": False}
+        with patch("sync.fetch_json", side_effect=fetch):
+            tags = sync.fetch_image_tags("quay.io/opendatahub/example")
+        self.assertEqual([tag["name"] for tag in tags], ["build-a", "build-b"])
 
 
 class TagSelectionTest(unittest.TestCase):

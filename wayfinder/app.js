@@ -511,13 +511,16 @@ function renderInstallGrid(downloads, page) {
   const container = el("div", null);
   container.id = "install-grid";
   const { items, totalPages } = paginate(downloads, page);
-  const grid = el("div", "cards");
+  const grid = el("div", "cards install-options");
   for (const dl of items) {
     const card = el("div", "card");
-    card.append(el("h3", null, dl.title));
-    if (dl.detail) card.append(el("p", null, dl.detail));
-    if (dl.value) card.append(cmdBlock(dl.value));
-    if (dl.url) card.append(extLink(dl.url, "Open guide →", "doc-open"));
+    const info = el("div", "install-info");
+    info.append(el("h3", null, dl.title));
+    if (dl.detail) info.append(el("p", null, dl.detail));
+    const actions = el("div", "install-actions");
+    if (dl.value) actions.append(cmdBlock(dl.value));
+    if (dl.url) actions.append(extLink(dl.url, "Open guide →", "btn btn-secondary"));
+    card.append(info, actions);
     grid.append(card);
   }
   container.append(grid);

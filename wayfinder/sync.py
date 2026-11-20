@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import gzip
 import http.client
 import os
 import re
@@ -15,6 +16,7 @@ import urllib.request
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 
 ROOT = Path(__file__).resolve().parent
 CATALOG_PATH = ROOT / "products.json"
@@ -160,7 +162,7 @@ def fetch_releases(repo: str, headers: dict[str, str]) -> list[dict]:
     page = 1
     while True:
         payload = fetch_json(
-            f"https://api.github.com/repos/{repo}/tags?per_page=100&page={page}",
+            f"https://api.github.com/repos/{repo}/tags?per_page=20&page={page}",
             headers,
         )
         if payload is None:
@@ -178,7 +180,7 @@ def fetch_releases(repo: str, headers: dict[str, str]) -> list[dict]:
                     "commitSha": tag_obj.get("commit", {}).get("sha"),
                 }
             )
-        if len(payload) < 100:
+        if len(payload) < 20:
             break
         page += 1
     releases.sort(
@@ -317,10 +319,15 @@ def fetch_json(url: str, headers: dict[str, str] | None = None) -> dict | None:
 
 
 def fetch_json_once(url: str, headers: dict[str, str] | None = None) -> dict | None:
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, **(headers or {})})
+    request = urllib.request.Request(url, headers={
+        "User-Agent": USER_AGENT, "Accept-Encoding": "gzip", **(headers or {}),
+    })
     try:
         with urllib.request.urlopen(request, timeout=45) as response:
-            return json.load(response)
+            payload = response.read()
+            if response.headers.get("Content-Encoding") == "gzip":
+                payload = gzip.decompress(payload)
+            return json.loads(payload)
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             return None
@@ -340,13 +347,17 @@ def quay_namespace(repository: str) -> tuple[str, str]:
 def fetch_image_tags(repository: str) -> list[dict]:
     namespace, name = quay_namespace(repository)
     base = f"https://quay.io/api/v1/repository/{namespace}/{name}/tag/"
-    listing = fetch_json(f"{base}?limit=100&page=1&onlyActiveTags=true")
-    if listing is None:
-        raise RuntimeError(f"Quay repository not found: {repository}")
-    tags = list(listing.get("tags") or [])
+    tags = []
+    for page in range(1, 21):
+        listing = fetch_json(f"{base}?limit=5&page={page}&onlyActiveTags=true")
+        if listing is None:
+            raise RuntimeError(f"Quay repository not found: {repository}")
+        tags.extend(listing.get("tags") or [])
+        if not listing.get("has_additional"):
+            break
     seen = {(tag.get("name"), tag.get("manifest_digest"), tag.get("last_modified")) for tag in tags}
     for channel in CHANNEL_NAMES:
-        extra = fetch_json(f"{base}?specificTag={channel}&limit=10")
+        extra = fetch_json(f"{base}?specificTag={channel}&limit=1&onlyActiveTags=true")
         for tag in (extra or {}).get("tags") or []:
             key = (tag.get("name"), tag.get("manifest_digest"), tag.get("last_modified"))
             if key not in seen:
@@ -368,9 +379,9 @@ def github_headers() -> dict[str, str]:
 
 def fetch_workflow_index(repo: str, headers: dict[str, str]) -> dict[str, dict]:
     found: dict[str, dict] = {}
-    for page in range(1, 6):
+    for page in range(1, 26):
         payload = fetch_json(
-            f"https://api.github.com/repos/{repo}/actions/workflows?per_page=100&page={page}",
+            f"https://api.github.com/repos/{repo}/actions/workflows?per_page=20&page={page}",
             headers,
         )
         if payload is None:
@@ -378,7 +389,7 @@ def fetch_workflow_index(repo: str, headers: dict[str, str]) -> dict[str, dict]:
         workflows = payload.get("workflows") or []
         for workflow in workflows:
             found[workflow["name"]] = workflow
-        if len(workflows) < 100:
+        if len(workflows) < 20:
             break
     return found
 
@@ -401,11 +412,15 @@ def collect(catalog: dict) -> dict:
     workflow_indexes: dict[str, dict[str, dict]] = {}
     releases_by_repo: dict[str, list[dict]] = {}
 
+    repositories = sorted({
+        image["repository"]
+        for product in catalog["products"]
+        for image in product.get("images") or []
+    })
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        tags_by_repo = dict(zip(repositories, executor.map(fetch_image_tags, repositories)))
+
     for product in catalog["products"]:
-        for image in product.get("images") or []:
-            repository = image["repository"]
-            if repository not in tags_by_repo:
-                tags_by_repo[repository] = fetch_image_tags(repository)
         for workflow in product.get("workflows") or []:
             repo = workflow["repo"]
             if repo not in workflow_indexes:
