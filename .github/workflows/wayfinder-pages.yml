@@ -1,0 +1,66 @@
+name: Wayfinder sync and deploy
+
+on:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'wayfinder/**'
+      - '.github/workflows/wayfinder-pages.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wayfinder-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Refresh public status
+        working-directory: wayfinder
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python sync.py
+      - name: Package site
+        run: |
+          mkdir -p _site/wayfinder/data
+          BUST="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sed "s|styles.css|styles.css?v=$BUST|;s|app.js|app.js?v=$BUST|" wayfinder/index.html > _site/wayfinder/index.html
+          cp wayfinder/styles.css wayfinder/app.js wayfinder/products.json _site/wayfinder/
+          cp wayfinder/data/status.json _site/wayfinder/data/
+          cat > _site/index.html <<'HTML'
+          <!doctype html>
+          <html lang="en">
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>Agent Ops</title>
+          <h1>Agent Ops</h1>
+          <p><a href="wayfinder/">Open AI Platform Wayfinder</a></p>
+          </html>
+          HTML
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,58 @@
+{
+  "products": [
+    {
+      "key": "openshell",
+      "name": "OpenShell",
+      "tagline": "Try OpenShell on OpenShift with ODH midstream images",
+      "description": "OpenShell provides isolated execution environments for autonomous AI agents, governed by declarative policies. Start with the Agent Ops walkthrough, then explore public ODH midstream images and build status. Red Hat Data Services (RHDS) is the downstream source.",
+      "requirements": "For the getting-started guide: an isolated OpenShift 4.21+ test cluster, cluster administrator access, oc, Helm, Agent Sandbox, dynamic storage, and inference-provider credentials. Follow the guide for required versions and permissions.",
+      "source": "https://github.com/opendatahub-io/openshell",
+      "sourceLabel": "ODH midstream source",
+      "releaseRepo": "opendatahub-io/openshell",
+      "docs": [
+        { "title": "Getting started on OpenShift", "detail": "Agent Ops walkthrough: install, connect the CLI, configure a provider, run an agent, and manage egress. Experimental test-cluster path; follow its pinned versions and SCC requirements.", "url": "https://github.com/opendatahub-io/agent-ops/blob/main/guides/getting-started-openshell-openshift.md", "icon": "rocket" },
+        { "title": "Kata sandbox guide", "detail": "Configure a Kata-backed RuntimeClass and verify VM isolation and network policy enforcement on OpenShift.", "url": "https://github.com/opendatahub-io/agent-ops/blob/main/guides/openshell-with-osc.md", "icon": "shield" },
+        { "title": "Inference routing with RHOAI", "detail": "Route sandbox inference to a RHOAI-served model through OpenShell without exposing provider credentials to the sandbox.", "url": "https://github.com/opendatahub-io/agent-ops/blob/main/guides/inference-routing-rhoai.md", "icon": "layers" },
+        { "title": "MLflow tracing demo", "detail": "Capture traces from agents running in OpenShell sandboxes and send them to MLflow on RHOAI.", "url": "https://github.com/opendatahub-io/agent-ops/tree/main/demos/mlflow-openshell-tracing", "icon": "code" },
+        { "title": "Architecture", "detail": "How the gateway, supervisor, policy engine, and sandbox fit together.", "url": "https://github.com/opendatahub-io/openshell#how-it-works", "icon": "layers" },
+        { "title": "RHOAI installer", "detail": "Alternative Helm-based installer for the gateway and dashboard. Review its configuration and prerequisites.", "url": "https://github.com/opendatahub-io/openshell/tree/main/deploy/rhoai", "icon": "cube" },
+        { "title": "Kubernetes manifests", "detail": "Deployment manifests and GPU-enabled configurations in ODH midstream.", "url": "https://github.com/opendatahub-io/openshell/tree/main/deploy/kube", "icon": "cube" },
+        { "title": "Helm charts", "detail": "Gateway and workspace Helm charts. Requires a CNI enforcing NetworkPolicy.", "url": "https://github.com/opendatahub-io/openshell/tree/main/deploy/helm", "icon": "cube" },
+        { "title": "ODH E2E configuration", "detail": "OpenShift e2e test values and entrypoint scripts used by the Konflux e2e pipeline.", "url": "https://github.com/opendatahub-io/openshell/tree/main/odh", "icon": "shield" },
+        { "title": "Konflux pipelines", "detail": "ODH midstream Tekton PipelineRuns for public image builds.", "url": "https://github.com/opendatahub-io/openshell/tree/main/.tekton", "icon": "code" },
+        { "title": "OpenShell Dashboard", "detail": "Web UI for managing workspaces, sandboxes, and gateway health.", "url": "https://github.com/opendatahub-io/openshell-dashboard", "icon": "layers" },
+        { "title": "SDKs", "detail": "Python, TypeScript, Go, and Rust client libraries for the gateway API.", "url": "https://github.com/opendatahub-io/openshell#sdks", "icon": "code" },
+        { "title": "RHDS downstream source", "detail": "Red Hat Data Services downstream source. The public images on this page come from ODH midstream.", "url": "https://github.com/red-hat-data-services/openshell", "icon": "code" }
+      ],
+      "downloads": [
+        { "title": "Start here: OpenShift walkthrough", "detail": "Go from installation to your first sandboxed agent with Agent Ops. Use an isolated test cluster and the versions and permissions specified in the guide.", "url": "https://github.com/opendatahub-io/agent-ops/blob/main/guides/getting-started-openshell-openshift.md" },
+        { "title": "RHOAI installer (alternative)", "detail": "Installs gateway + dashboard via Helm. Run from an ODH OpenShell checkout after preparing config.json; see the installer documentation.", "url": "https://github.com/opendatahub-io/openshell/tree/main/deploy/rhoai", "value": "uv run --script --python 3.12 deploy/rhoai/install.py --config config.json" },
+        { "title": "Pull gateway image", "detail": "Pull the gateway image directly from the public ODH registry.", "value": "podman pull quay.io/opendatahub/odh-openshell-gateway:odh-stable" },
+        { "title": "Pull all images", "detail": "Pull all four core OpenShell images from the ODH registry.", "value": "for img in gateway supervisor sandbox cli; do podman pull quay.io/opendatahub/odh-openshell-${img}:odh-stable; done" },
+        { "title": "Python SDK", "detail": "Connect applications to an OpenShell gateway. Requires uv.", "value": "uv add openshell" }
+      ],
+      "images": [
+        { "name": "Gateway", "role": "Control-plane API: sandbox lifecycle, auth boundary, and policy distribution.", "repository": "quay.io/opendatahub/odh-openshell-gateway", "pullTag": "odh-stable", "release": true },
+        { "name": "Supervisor", "role": "Sidecar that enforces policy beside each sandbox container.", "repository": "quay.io/opendatahub/odh-openshell-supervisor", "pullTag": "odh-stable", "release": true },
+        { "name": "Sandbox", "role": "Isolated runtime where the agent executes. Kernel-level confinement.", "repository": "quay.io/opendatahub/odh-openshell-sandbox", "pullTag": "odh-stable", "release": true },
+        { "name": "Sandbox (OpenClaw)", "role": "Alternative sandbox image built with the OpenClaw runtime.", "repository": "quay.io/opendatahub/odh-openshell-sandbox-openclaw", "pullTag": "odh-stable" },
+        { "name": "CLI", "role": "The openshell command packaged as a container image.", "repository": "quay.io/opendatahub/odh-openshell-cli", "pullTag": "odh-stable", "release": true },
+        { "name": "E2E Tests", "role": "Shift-left e2e test runner built by Konflux.", "repository": "quay.io/opendatahub/odh-openshell-e2e", "pullTag": "odh-stable" },
+        { "name": "Dashboard", "role": "Web UI for workspaces, sandboxes, and gateway health.", "repository": "quay.io/opendatahub/odh-openshell-dashboard", "pullTag": "odh-stable" }
+      ],
+      "workflows": [
+        { "repo": "opendatahub-io/openshell", "name": "ODH Trivy Image Scan" },
+        { "repo": "opendatahub-io/openshell", "name": "Required CI Gates" },
+        { "repo": "opendatahub-io/openshell", "name": "ODH Python Gate Checks" },
+        { "repo": "opendatahub-io/openshell", "name": "ODH Deploy Contract" },
+        { "repo": "opendatahub-io/openshell", "name": "Disconnected Readiness" },
+        { "repo": "red-hat-data-services/openshell", "name": "Required CI Gates" },
+        { "repo": "red-hat-data-services/openshell", "name": "Build CI Image" },
+        { "repo": "red-hat-data-services/openshell", "name": "Trivy Changes" },
+        { "repo": "red-hat-data-services/openshell", "name": "Dependency Review" },
+        { "repo": "red-hat-data-services/openshell", "name": "Workflow Security Reports" },
+        { "repo": "red-hat-data-services/openshell", "name": "CodeQL" }
+      ]
+    }
+  ]
+}

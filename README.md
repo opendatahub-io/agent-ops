@@ -2,6 +2,14 @@
 
 Demos, guides, and getting-started material for running [OpenShell](https://docs.nvidia.com/openshell/latest/) on OpenShift.
 
+## AI Platform Wayfinder
+
+[AI Platform Wayfinder](https://opendatahub-io.github.io/agent-ops/wayfinder/)
+collects getting-started guides, public container images, releases, and CI status.
+Its initial catalog covers OpenShell. See [the site documentation](wayfinder/README.md)
+for local development, catalog updates, and deployment setup. The site becomes
+available after the Pages workflow is enabled and deployed.
+
 ## Guides
 
 ### [Getting Started with OpenShell on OpenShift](guides/getting-started-openshell-openshift.md)
