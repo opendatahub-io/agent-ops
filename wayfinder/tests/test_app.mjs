@@ -46,7 +46,7 @@ class Element {
 
 function descendants(node) { return node.children.flatMap(child => [child, ...descendants(child)]); }
 
-async function boot({ status = { products: [] }, catalogData = catalog, statusFailure, catalogFailure } = {}) {
+async function boot({ status = { products: [] }, catalogData = catalog, statusFailure, catalogFailure, statusGate } = {}) {
   const roots = Object.fromEntries(
     ["product-nav", "sync-time", "content-inner", "sidebar", "menu-toggle"].map(id => {
       const node = new Element("div");
@@ -63,12 +63,13 @@ async function boot({ status = { products: [] }, catalogData = catalog, statusFa
     querySelectorAll: selector => Object.values(roots).flatMap(root => root.querySelectorAll(selector)),
   };
   const context = vm.createContext({
-    document, Intl, Date, URL, setTimeout,
+    document, Intl, Date, URL, setTimeout, AbortSignal,
     location: { hash: "#openshell" },
     history: { replaceState() {} },
     window: { scrollTo() {} },
     console: { error: (...args) => errors.push(args) },
     fetch: async path => {
+      if (path !== "products.json" && statusGate) await statusGate;
       const failure = path === "products.json" ? catalogFailure : statusFailure;
       if (failure === "network") throw new TypeError("Network unavailable");
       return {
@@ -94,6 +95,48 @@ test("Get started and the first install card open the Agent Ops guide", async ()
   assert.equal(descendants(card).find(n => n.tagName === "a").href, guide);
   assert.equal(descendants(card).filter(n => n.tagName === "code").length, 0);
   assert.equal(roots["content-inner"].textContent.includes("undefined"), false);
+});
+
+for (const failure of [false, true]) {
+  test(`catalog and tabs work before status ${failure ? "fails" : "loads"}`, async () => {
+    let resolve, reject;
+    const statusGate = new Promise((yes, no) => { resolve = yes; reject = no; });
+    const { roots, document, errors } = await boot({ statusGate, status: { generatedAt: "2026-11-24T10:00:00Z", products: [] } });
+    assert.equal(descendants(roots["content-inner"]).find(n => n.textContent === "Get started →").href, guide);
+    assert.equal(roots["sync-time"].textContent, "Loading status…");
+    descendants(roots["content-inner"]).find(n => n.dataset.tab === "docs").listeners.click();
+    if (failure) reject(new Error("Status request timed out"));
+    else resolve();
+    await new Promise(setImmediate);
+    assert.match(document.getElementById("tab-pane").textContent, /Documentation/);
+    assert.equal(descendants(roots["product-nav"]).filter(n => n.dataset.key).length, catalog.products.length);
+    if (failure) {
+      assert.equal(roots["sync-time"].textContent, "Status unavailable");
+      assert.equal(errors[0][1].code, "STATUS_LOAD_FAILED");
+    } else assert.match(roots["sync-time"].textContent, /^Synced /);
+  });
+}
+
+test("modified product clicks retain native navigation", async () => {
+  const { roots } = await boot();
+  const link = descendants(roots["product-nav"]).find(n => n.dataset.key);
+  for (const modifier of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { altKey: true }, { button: 1 }]) {
+    link.listeners.click({ ...modifier, preventDefault() { assert.fail("modified click was intercepted"); } });
+  }
+});
+
+test("latest release pull commands use version tags and never fall back to an older complete release", async () => {
+  const { context } = await boot();
+  context.fixture = { releases: [{ tag: "v0.1.8-rhaiv.2", upstreamVersion: "0.1.8", allBuilt: true, components: [
+    { repository: "quay.io/opendatahub/gateway", tag: "v0.1.8-rhaiv.2", found: true },
+  ] }] };
+  let section = vm.runInContext("renderReleases({}, fixture)", context);
+  assert.match(section.textContent, /podman pull quay.io\/opendatahub\/gateway:v0.1.8-rhaiv.2/);
+  assert.doesNotMatch(section.textContent, /:odh-stable/);
+  context.fixture.releases.unshift({ tag: "v0.1.9-rhaiv.0", upstreamVersion: "0.1.9", allBuilt: false, components: [] });
+  section = vm.runInContext("renderReleases({}, fixture)", context);
+  assert.match(section.textContent, /latest versioned release has missing images/);
+  assert.doesNotMatch(section.textContent, /podman pull/);
 });
 
 test("a published E2E image cannot override a failing CI run", async () => {

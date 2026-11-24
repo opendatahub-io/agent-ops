@@ -100,7 +100,7 @@ let liveData = null;
 let liveDataError = false;
 
 async function fetchJson(path) {
-  const response = await fetch(path, { cache: "no-store" });
+  const response = await fetch(path, { cache: "no-store", signal: AbortSignal.timeout(15000) });
   if (!response.ok) throw new Error(`GET ${path} failed: HTTP ${response.status}`);
   return response.json();
 }
@@ -202,19 +202,23 @@ function validateData(data, kind) {
 }
 
 async function loadData() {
+  catalog = validateData(await fetchJson("products.json"), "catalog");
+}
+
+async function loadStatus() {
   liveDataError = false;
-  const [cat, live] = await Promise.all([
-    fetchJson("products.json").then(data => validateData(data, "catalog")),
-    fetchJson("data/status.json").then(data => validateData(data, "status")).catch(error => {
-      liveDataError = true;
-      console.error("Live status unavailable", {
-        stage: "load_status", code: "STATUS_LOAD_FAILED", resource: "data/status.json", cause: error,
-      });
-      return null;
-    }),
-  ]);
-  catalog = cat;
-  liveData = live;
+  try {
+    liveData = validateData(await fetchJson("data/status.json"), "status");
+  } catch (error) {
+    liveDataError = true;
+    liveData = null;
+    console.error("Live status unavailable", {
+      stage: "load_status", code: "STATUS_LOAD_FAILED", resource: "data/status.json", cause: error,
+    });
+  }
+  updateSyncTime();
+  const product = catalog.products.find(p => p.key === activeKey);
+  if (product) renderProduct(product);
 }
 
 function liveProduct(key) {
@@ -240,15 +244,22 @@ function buildNav() {
     item.href = "#" + encodeURIComponent(product.key);
     item.dataset.key = product.key;
     item.addEventListener("click", event => {
+      if (event.button > 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
       event.preventDefault();
       selectProduct(product.key);
     });
     nav.append(item);
   });
+  updateSyncTime();
+}
+
+function updateSyncTime() {
   if (liveData?.generatedAt) {
     syncEl.textContent = "Synced " + formatDate(liveData.generatedAt);
   } else if (liveDataError) {
     syncEl.textContent = "Status unavailable";
+  } else {
+    syncEl.textContent = "Loading status…";
   }
 }
 
@@ -282,7 +293,7 @@ function renderTabs(product, live) {
     const btn = el("button", "tab-btn", tab.label);
     btn.dataset.tab = tab.id;
     btn.type = "button";
-    if (tab.id === "install") btn.classList.add("active");
+    if (tab.id === (activeTab || "install")) btn.classList.add("active");
     btn.addEventListener("click", () => switchTab(tab.id, product, live));
     bar.append(btn);
   }
@@ -458,6 +469,13 @@ function renderReleases(product, live) {
   if (!releases.length) {
     section.append(el("p", "section-lead", "No version-tagged releases found."));
     return section;
+  }
+  const latest = releases[0];
+  section.append(el("h3", null, `Latest versioned release: ${latest.tag}`));
+  if (latest.allBuilt && latest.components?.length) {
+    section.append(cmdBlock(latest.components.map(comp => `podman pull ${comp.repository}:${comp.tag}`).join("\n")));
+  } else {
+    section.append(el("p", "section-lead", "The latest versioned release has missing images. Check component availability below."));
   }
   section.append(renderReleaseList(releases, 1));
   return section;
@@ -689,8 +707,8 @@ function renderProduct(p) {
   fragment.append(renderTabs(p, live));
   const pane = el("div", null);
   pane.id = "tab-pane";
-  activeTab = "install";
-  pane.append(renderTabContent("install", p, live));
+  activeTab = activeTab || "install";
+  pane.append(renderTabContent(activeTab, p, live));
   fragment.append(pane);
   contentInner.replaceChildren(fragment);
 }
@@ -705,6 +723,7 @@ function renderProduct(p) {
     const first = (catalog?.products || [])[0];
     const initial = hash && (catalog?.products || []).find(p => p.key === hash) ? hash : first?.key;
     if (initial) selectProduct(initial);
+    await loadStatus();
   } catch (err) {
     console.error("Page initialization failed", {
       stage: "initialize_page", code: "PAGE_INIT_FAILED", cause: err,

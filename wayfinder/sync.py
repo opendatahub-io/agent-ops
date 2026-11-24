@@ -98,7 +98,7 @@ def public_tag(tag: dict) -> dict:
 
 
 def registry_url(repository: str) -> str:
-    namespace, name = repository.removeprefix("quay.io/").split("/", 1)
+    namespace, name = quay_namespace(repository)
     return f"https://quay.io/repository/{namespace}/{name}"
 
 
@@ -198,6 +198,13 @@ def correlate_releases(
 ) -> list[dict]:
     """For each release tag, check which images have a matching Quay tag."""
     release_images = [img for img in images if img.get("release")]
+    lookups = list(dict.fromkeys(
+        (img["repository"], rel["tag"])
+        for rel in releases[:limit]
+        for img in release_images
+    ))
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        checks = dict(zip(lookups, executor.map(lambda key: fetch_version_tag(*key), lookups)))
     result = []
     for rel in releases[:limit]:
         tag_name = rel["tag"]
@@ -205,7 +212,7 @@ def correlate_releases(
         all_found = bool(release_images)
         for img in release_images:
             repo = img["repository"]
-            quay_tag = fetch_version_tag(repo, tag_name)
+            quay_tag = checks[(repo, tag_name)]
             found = quay_tag is not None
             if not found:
                 all_found = False
@@ -283,6 +290,9 @@ def load_catalog(path: Path) -> dict:
         catalog = json.load(handle)
     if not isinstance(catalog.get("products"), list) or not catalog["products"]:
         raise ValueError(f"{path} must contain a non-empty products list")
+    for product in catalog["products"]:
+        for image in product.get("images") or []:
+            quay_namespace(image.get("repository"))
     return catalog
 
 
@@ -296,7 +306,14 @@ def github_token() -> str | None:
             check=True,
             capture_output=True,
             text=True,
+            timeout=5,
         )
+    except subprocess.TimeoutExpired:
+        print(json.dumps({
+            "stage": "github_auth", "code": "GITHUB_TOKEN_LOOKUP_TIMEOUT",
+            "fallback": "anonymous_public_reads",
+        }), file=sys.stderr)
+        return None
     except (OSError, subprocess.CalledProcessError):
         return None
     token = completed.stdout.strip()
@@ -340,8 +357,8 @@ def fetch_json_once(url: str, headers: dict[str, str] | None = None) -> dict | N
 
 
 def quay_namespace(repository: str) -> tuple[str, str]:
-    if not repository.startswith("quay.io/"):
-        raise ValueError(f"{repository} is not a quay.io repository")
+    if not isinstance(repository, str) or not re.fullmatch(r"quay\.io/[a-z0-9]+(?:[._-][a-z0-9]+)*/[a-z0-9]+(?:[._/-][a-z0-9]+)*", repository):
+        raise ValueError(f"Invalid Quay repository: {repository!r}; expected quay.io/namespace/name")
     namespace, name = repository.removeprefix("quay.io/").split("/", 1)
     return namespace, name
 

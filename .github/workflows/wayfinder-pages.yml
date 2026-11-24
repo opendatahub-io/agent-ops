@@ -19,6 +19,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -37,7 +38,7 @@ jobs:
         run: |
           mkdir -p _site/wayfinder/data
           BUST="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          sed "s|styles.css|styles.css?v=$BUST|;s|app.js|app.js?v=$BUST|" wayfinder/index.html > _site/wayfinder/index.html
+          sed "s|href=\"styles\\.css\"|href=\"styles.css?v=$BUST\"|;s|src=\"app\\.js\"|src=\"app.js?v=$BUST\"|" wayfinder/index.html > _site/wayfinder/index.html
           cp wayfinder/styles.css wayfinder/app.js wayfinder/products.json _site/wayfinder/
           cp wayfinder/data/status.json _site/wayfinder/data/
           cat > _site/index.html <<'HTML'
@@ -57,6 +58,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       pages: write
       id-token: write

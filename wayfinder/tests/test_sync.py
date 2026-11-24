@@ -27,6 +27,48 @@ from sync import (  # noqa: E402
 )
 
 
+class ReviewRobustnessTest(unittest.TestCase):
+    def test_token_lookup_timeout_is_bounded_and_reports_anonymous_fallback(self):
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch("sync.subprocess.run", side_effect=sync.subprocess.TimeoutExpired("gh", 5)) as run,
+            patch("sys.stderr", new_callable=io.StringIO) as stderr,
+        ):
+            self.assertIsNone(sync.github_token())
+        self.assertEqual(run.call_args.kwargs["timeout"], 5)
+        self.assertIn("GITHUB_TOKEN_LOOKUP_TIMEOUT", stderr.getvalue())
+        self.assertIn("anonymous_public_reads", stderr.getvalue())
+
+    def test_quay_repository_validation_preserves_nested_names(self):
+        self.assertEqual(sync.registry_url("quay.io/aipcc/base-images/agentic/oce-runtime"),
+                         "https://quay.io/repository/aipcc/base-images/agentic/oce-runtime")
+        for value in [None, "broken", "quay.io/namespace/", "quay.io//image", "https://quay.io/ns/image", "quay.io/ns/image?tag=latest"]:
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "Invalid Quay repository"):
+                sync.registry_url(value)
+
+    def test_invalid_catalog_fails_before_network_reads_or_snapshot_replacement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            catalog = Path(directory) / "products.json"
+            output = Path(directory) / "status.json"
+            catalog.write_text('{"products":[{"key":"bad","images":[{"repository":"broken"}]}]}')
+            output.write_text("previous snapshot")
+            with patch("sync.CATALOG_PATH", catalog), patch("sync.OUTPUT_PATH", output), patch("sync.fetch_json") as fetch:
+                with self.assertRaisesRegex(ValueError, "Invalid Quay repository"):
+                    sync.main()
+                fetch.assert_not_called()
+            self.assertEqual(output.read_text(), "previous snapshot")
+
+    def test_parallel_release_checks_preserve_order_and_surface_failures(self):
+        release = {"tag": "v0.1.8-rhaiv.2", "upstreamVersion": "0.1.8", "rhaivNumber": 2}
+        images = [{"name": name, "repository": f"quay.io/ns/{name}", "release": True} for name in ["gateway", "cli"]]
+        with patch("sync.fetch_version_tag", side_effect=lambda repo, tag: {"manifest_digest": repo}):
+            result = correlate_releases([release], images, {})[0]
+        self.assertEqual([image["name"] for image in result["components"]], ["gateway", "cli"])
+        with patch("sync.fetch_version_tag", side_effect=RuntimeError("registry unavailable")):
+            with self.assertRaisesRegex(RuntimeError, "registry unavailable"):
+                correlate_releases([release], images, {})
+
+
 class TransportFailureTest(unittest.TestCase):
     def test_wrapped_connection_timeout_retries_then_recovers(self):
         timeout = urllib.error.URLError(TimeoutError("connection timed out"))

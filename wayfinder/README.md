@@ -44,6 +44,10 @@ The Releases tab discovers `vX.Y.Z-rhaiv.N` tags from ODH midstream and checks
 the four core images in Quay. An NVIDIA upstream release alone does not create
 an ODH release entry. Published images, test-image availability, and independent
 CI runs do not prove that a particular image set passed deployment validation.
+The Releases tab offers pull commands for the highest versioned release when
+all its core images are available. If that release is incomplete, it shows the
+missing images instead of silently choosing an older release. `odh-stable`
+continues to track builds independently of these version tags.
 
 ## Quick start
 
@@ -97,3 +101,9 @@ node --test tests/test_app.mjs
 Tests run on pull requests without contacting registries or inference providers.
 If the live status snapshot cannot be loaded, the page keeps the guides usable,
 shows that status is unavailable, and logs a structured diagnostic in the console.
+The catalog renders before the independent status request completes. Status
+updates preserve the selected product and tab; browser requests time out after
+15 seconds. Sync checks release images with at most four concurrent requests,
+and rejects malformed repository configuration before fetching or replacing
+the previous snapshot. Optional local GitHub CLI token lookup times out after
+five seconds with an explicit anonymous-read fallback diagnostic.
