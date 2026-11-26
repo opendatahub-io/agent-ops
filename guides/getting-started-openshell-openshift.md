@@ -98,9 +98,9 @@ helm install openshell oci://ghcr.io/nvidia/openshell/helm-chart \
   --set podSecurityContext.fsGroup=null \
   --set securityContext.runAsUser=null \
   --set server.auth.allowUnauthenticatedUsers=true \
+  --set server.telemetryEnabled=false \
   --set "pkiInitJob.serverDnsNames[0]=${ROUTE_HOST}"
 ```
-
 
 ### Option B: External PostgreSQL database
 
@@ -136,10 +136,23 @@ helm install openshell oci://ghcr.io/nvidia/openshell/helm-chart \
   --set podSecurityContext.fsGroup=null \
   --set securityContext.runAsUser=null \
   --set server.auth.allowUnauthenticatedUsers=true \
+  --set server.telemetryEnabled=false \
   --set "pkiInitJob.serverDnsNames[0]=${ROUTE_HOST}"
 ```
 
 `workload.kind=deployment` lets you run multiple gateway replicas that all connect to the same external database. Option A uses `statefulset` instead because each pod needs its own persistent volume for the SQLite file.
+
+### Disable telemetry (OpenShell < 0.0.103)
+
+Disable anonymous telemetry collection from the gateway and sandbox supervisors. The Helm chart does not wire `server.telemetryEnabled` into the pod environment until [v0.0.103](https://github.com/NVIDIA/OpenShell/pull/2648), so this manual step is required:
+
+```shell
+# Option A (StatefulSet):
+oc set env statefulset/openshell OPENSHELL_TELEMETRY_ENABLED=false -n openshell
+
+# Option B (Deployment):
+oc set env deployment/openshell OPENSHELL_TELEMETRY_ENABLED=false -n openshell
+```
 
 ### Verify the installation
 

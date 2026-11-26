@@ -187,6 +187,7 @@ install_helm() {
             --set podSecurityContext.fsGroup=null \
             --set securityContext.runAsUser=null \
             --set server.auth.allowUnauthenticatedUsers=true \
+            --set server.telemetryEnabled=false \
             --set "pkiInitJob.serverDnsNames[0]=${ROUTE_HOSTNAME}"
     else
         log_info "Installing OpenShell ${HELM_VERSION}..."
@@ -200,8 +201,15 @@ install_helm() {
             --set podSecurityContext.fsGroup=null \
             --set securityContext.runAsUser=null \
             --set server.auth.allowUnauthenticatedUsers=true \
+            --set server.telemetryEnabled=false \
             --set "pkiInitJob.serverDnsNames[0]=${ROUTE_HOSTNAME}"
     fi
+
+    # Required for OpenShell < 0.0.103 where the Helm chart does not wire
+    # server.telemetryEnabled into the pod environment.
+    # See https://github.com/NVIDIA/OpenShell/pull/2648
+    log_info "Disabling anonymous telemetry..."
+    oc set env statefulset/openshell OPENSHELL_TELEMETRY_ENABLED=false -n "${NAMESPACE}"
 
     log_info "OpenShell installed successfully"
 }
