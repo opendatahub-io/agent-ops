@@ -1,0 +1,9 @@
+FROM registry.access.redhat.com/ubi9/python-312:latest
+USER 0
+RUN pip install --no-cache-dir 'anthropic>=0.50,<1' 'httpx>=0.28,<1' 'pydantic-settings>=2,<3' 'pyjwt>=2.10,<3' 'mlflow-skinny==3.17.2'
+WORKDIR /app
+COPY backend/red_compass /app/red_compass
+RUN chmod -R a+rX /app
+ENV HOME=/sandbox TMPDIR=/tmp PYTHONPATH=/app PYTHONUNBUFFERED=1
+USER 1001
+CMD ["python3.12", "-m", "red_compass.agent"]

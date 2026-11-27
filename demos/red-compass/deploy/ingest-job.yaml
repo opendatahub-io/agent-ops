@@ -1,0 +1,37 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ingest-demo-2026-01
+  namespace: red-compass
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: ingestion
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ingest
+          image: image-registry.openshift-image-registry.svc:5000/red-compass/api:latest
+          command: [python3.12, -m, red_compass.retrieval]
+          envFrom:
+            - configMapRef:
+                name: application
+            - secretRef:
+                name: application
+          resources:
+            requests:
+              cpu: 250m
+              memory: 2Gi
+            limits:
+              memory: 3Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]

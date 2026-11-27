@@ -1,0 +1,12 @@
+FROM registry.access.redhat.com/ubi9/python-312:latest
+USER 0
+WORKDIR /app
+COPY backend /app/backend
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu && pip install --no-cache-dir /app/backend
+ENV HF_HOME=/opt/models HF_HUB_OFFLINE=0
+RUN python -c "from huggingface_hub import snapshot_download; snapshot_download('sentence-transformers/all-MiniLM-L6-v2', ignore_patterns=['*.onnx','*.bin','openvino/*','onnx/*','*.h5','*.msgpack'])" && chmod -R a+rX /opt/models
+COPY policies /app/policies
+ENV POLICY_DIR=/app/policies HF_HUB_OFFLINE=1 PYTHONUNBUFFERED=1
+USER 1001
+EXPOSE 8000
+CMD ["uvicorn", "red_compass.api:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]

@@ -1,0 +1,15 @@
+FROM registry.access.redhat.com/ubi9/nodejs-22:latest AS build
+WORKDIR /opt/app-root/src
+COPY frontend/package*.json ./
+RUN npm ci
+COPY frontend/ ./
+ENV API_INTERNAL_URL=http://api.red-compass.svc.cluster.local:8000 NEXT_TELEMETRY_DISABLED=1
+RUN mkdir -p public && npm run build
+FROM registry.access.redhat.com/ubi9/nodejs-22-minimal:latest
+WORKDIR /opt/app-root/src
+COPY --from=build /opt/app-root/src/.next/standalone ./
+COPY --from=build /opt/app-root/src/.next/static ./.next/static
+COPY --from=build /opt/app-root/src/public ./public
+ENV PORT=3000 HOSTNAME=0.0.0.0 NEXT_TELEMETRY_DISABLED=1
+EXPOSE 3000
+CMD ["node", "server.js"]

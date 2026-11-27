@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: red-compass
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: image-registry.openshift-image-registry.svc:5000/red-compass/worker:latest
+          envFrom:
+            - configMapRef:
+                name: application
+            - secretRef:
+                name: application
+          env:
+            - name: OPENSHELL_GATEWAY_URL
+              value: openshell.openshell.svc.cluster.local:8080
+            - name: OPENSHELL_CA_PATH
+              value: /tls/ca.crt
+            - name: OPENSHELL_CERT_PATH
+              value: /tls/tls.crt
+            - name: OPENSHELL_KEY_PATH
+              value: /tls/tls.key
+          volumeMounts:
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        - name: tls
+          secret:
+            secretName: openshell-client-tls

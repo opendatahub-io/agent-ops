@@ -1,0 +1,30 @@
+global:
+  image:
+    registry: quay.io/opendatahub
+    tag: v0.1.6-rhaiv.3
+gateway:
+  image:
+    repository: odh-openshell-gateway
+sandboxRuntime:
+  image:
+    repository: odh-openshell-sandbox
+supervisor:
+  image:
+    repository: odh-openshell-supervisor
+  podSecurityContext:
+    runAsUser: null
+    runAsGroup: null
+    fsGroup: null
+sandbox:
+  image:
+    repository: image-registry.openshift-image-registry.svc:5000/red-compass/agent
+    tag: latest
+podSecurityContext: null
+securityContext:
+  runAsNonRoot: true
+  runAsUser: null
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: [ALL]
+server:
+  telemetryEnabled: false

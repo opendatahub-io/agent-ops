@@ -1,0 +1,8 @@
+FROM registry.access.redhat.com/ubi9/python-312:latest
+USER 0
+RUN pip install --no-cache-dir 'mlflow==3.17.2' && mkdir -p /data && chgrp 0 /data && chmod g=u /data
+ENV HOME=/tmp MLFLOW_ENABLE_TELEMETRY=false MLFLOW_DISABLE_AGENT_HINT=1 PYTHONUNBUFFERED=1
+WORKDIR /data
+USER 1001
+EXPOSE 5000
+CMD ["mlflow", "server", "--host", "0.0.0.0", "--port", "5000", "--workers", "1", "--backend-store-uri", "sqlite:////data/mlflow.db", "--artifacts-destination", "/data/artifacts"]

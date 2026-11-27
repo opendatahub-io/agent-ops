@@ -1,0 +1,17 @@
+FROM registry.access.redhat.com/ubi9/ubi:latest AS builder
+USER 0
+RUN dnf -y install gcc make git tar gzip perl && dnf clean all
+ARG POSTGRES_VERSION=16.15
+RUN curl -fsSL https://ftp.postgresql.org/pub/source/v${POSTGRES_VERSION}/postgresql-${POSTGRES_VERSION}.tar.gz | tar -xz -C /tmp && cd /tmp/postgresql-${POSTGRES_VERSION} && ./configure --prefix=/opt/postgresql --without-readline --without-zlib --without-icu && make -j2 && make install
+ENV PATH=/opt/postgresql/bin:$PATH
+ARG PGVECTOR_VERSION=v0.8.1
+RUN git clone --branch ${PGVECTOR_VERSION} --depth 1 https://github.com/pgvector/pgvector.git /tmp/pgvector && cd /tmp/pgvector && make && make install && rm -rf /tmp/pgvector
+FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+COPY --from=builder /opt/postgresql /opt/postgresql
+ENV PATH=/opt/postgresql/bin:$PATH
+COPY deploy/start-database.sh /usr/local/bin/start-database
+RUN chmod 755 /usr/local/bin/start-database && mkdir -p /var/lib/pgsql/data && chgrp -R 0 /var/lib/pgsql && chmod -R g=u /var/lib/pgsql && chmod g+w /etc/passwd
+ENV PGDATA=/var/lib/pgsql/data/db
+USER 1001
+EXPOSE 5432
+CMD ["/usr/local/bin/start-database"]
